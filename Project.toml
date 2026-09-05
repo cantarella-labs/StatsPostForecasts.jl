@@ -29,8 +29,8 @@ JSON = "1.7.1"
 JuMP = "1.31.2"
 Optim = "2.3.1"
 Statistics = "1.11.5"
-julia = "1.11"
+julia = "1.12"
 
-# CfGRIB is not registered; [sources] (Julia ≥ 1.11) lets CI resolve it without a Manifest
+# CfGRIB is not registered; [sources] lets CI resolve it without a Manifest
 [sources]
 CfGRIB = {url = "https://github.com/vcantarella/cfgrib.jl", rev = "dev"}
