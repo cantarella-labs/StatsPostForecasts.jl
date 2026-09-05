@@ -1,0 +1,25 @@
+name: Format
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+    branches:
+      - main
+
+jobs:
+  format:
+    name: JuliaFormatter check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: julia-actions/setup-julia@v3
+        with:
+          version: "1"
+      - uses: julia-actions/cache@v3
+      # Fix locally with:  julia -e 'using JuliaFormatter; format(".")'
+      - name: Check formatting
+        run: |
+          julia -e 'using Pkg; Pkg.add(PackageSpec(name = "JuliaFormatter", version = "2"))'
+          julia -e 'using JuliaFormatter; format(".", overwrite = false) || exit(1)'

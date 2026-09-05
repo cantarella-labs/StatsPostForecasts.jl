@@ -1,0 +1,42 @@
+# Changes here will be overwritten by Copier
+AddAgentsMd: false
+AddAllcontributors: false
+AddChangelog: true
+AddCitationCFF: true
+AddCodeOfConduct: false
+AddContributionDocs: true
+AddCopierCI: false
+AddDocs: true
+AddDocsCI: true
+AddFormatterAndLinterConfigFiles: true
+AddGitHubPRTemplate: false
+AddGitHubTemplates: false
+AddLintCI: false
+AddLychee: true
+AddMacToCI: true
+AddPrecommit: false
+AddTagBotCI: true
+AddTestCI: true
+AddVSCodeRecommendations: true
+AddWinToCI: true
+Authors: Vitor Cantarella vcantarella@cantarellalabs.com
+CheckExplicitImports: true
+ConfigIndentation: 2
+ExplicitImportsChecklist: exclude_all_qualified_accesses_are_public
+GitHubActionVersionAutoUpdate: dependabot
+JuliaCompatAutoUpdate: dependabot
+JuliaIndentation: 4
+JuliaMinCIVersion: lts
+JuliaMinVersion: '1.10'
+License: MIT
+LicenseCopyrightHolders: Vitor Cantarella vcantarella@cantarellalabs.com
+MarkdownIndentation: 2
+PackageName: StatsPostForecasts
+PackageOwner: cantarella-labs
+PackageUUID: 2e3e64ef-904e-52a9-9f53-7664812ca0e4
+RunJuliaNightlyOnCI: false
+StrategyConfirmIncluded: true
+StrategyLevel: 1
+StrategyReviewExcluded: false
+TestingStrategy: testitem_basic
+_src_path: /Users/vcantarella/.julia/packages/BestieTemplate/MPEqY
