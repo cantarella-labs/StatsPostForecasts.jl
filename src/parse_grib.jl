@@ -1,65 +1,59 @@
 import Dates: DateTime, Hour, Dates, unix2datetime
 import Downloads, JSON
-using CfGRIB
+using GRIBDatasets
 
 #=
-CfGRIB.jl → Forecast / InitForecast, one InitForecast per (run, station).
+GRIBDatasets.jl → Forecast / InitForecast, one InitForecast per station.
 
-Bare `DataSet` on purpose: the AxisArrays / DimensionalData backends read
-the whole variable into memory on `convert` (~260 MB per step per parameter
-for a global 0.25° ENS file). Here one (number, lon, lat) block is read per
-step instead.
-
-Known limitation: CfGRIB.jl has no `filter_by_keys` yet, so a file mixing
-the control run (`type = cf`) with the perturbed members may not open
-cleanly. `download_ecmwf_ens` fetches the perturbed members only.
+GRIBDatasets lays a variable out as (lon, lat, level, number, valid_time)
+and has no time × step product, so a file must hold exactly one run —
+which is what `download_ecmwf_ens` writes. Steps are valid_time minus the
+reference time. One (lon, lat, number) block is read per step; the whole
+variable is never materialised (~260 MB per step per parameter for a
+global 0.25° ENS file). A file mixing the control run with the perturbed
+members opens with `GRIBDataset(path; filter_by_values = Dict("dataType" => "pf"))`.
 =#
 
-# `[x;]`: CfGRIB squeezes single-run files to a scalar; this makes it a vector
-"Initialisation time(s) of the runs in `ds` (UTC), from its `time` coordinate."
-init_times(ds::CfGRIB.DataSet) = unix2datetime.([ds.variables["time"].data;])
-"Forecast steps of `ds` as `Hour`s, from its `step` coordinate."
-lead_times(ds::CfGRIB.DataSet) = Hour.([ds.variables["step"].data;])
-
-# ponytail: ECMWF ENS files always come out of CfGRIB in this dimension
-# order; anything else is an error, not a permutedims.
-function _block(var::CfGRIB.Variable, itime, k)
-    d = var.dimensions
-    A = var.data::Union{CfGRIB.OnDiskArray,Array}   # a field is never the squeezed scalar
-    d == ("number", "step", "longitude", "latitude") && return A[:, k, :, :]
-    d == ("number", "time", "step", "longitude", "latitude") && return A[:, itime, k, :, :]
-    throw(ArgumentError("unexpected dimensions $d"))
-end
+"Initialisation time (UTC) of the single run in `ds`; errors if `ds` holds several."
+init_time(ds::GRIBDataset) = unix2datetime(GRIBDatasets.getone(ds.index, "time"))
+"Forecast steps of `ds` as `Hour`s, from its `valid_time` coordinate."
+lead_times(ds::GRIBDataset) = Hour.(ds["valid_time"][:] .- init_time(ds))
 
 """
-    read_init_forecasts(ds_or_path, varname, stations; itime=1, F=Float64)
+    read_init_forecasts(ds_or_path, varname, stations; F=Float64)
 
 Ensemble forecasts of `varname` at each `(lat, lon)` station (nearest grid
-point, no interpolation) for run `itime`, one `InitForecast` per station.
-Each step's field block is read once and all stations are picked from it.
-A `missing` at a station is an error. Member order is the file's.
+point, no interpolation), one `InitForecast` per station. The file must
+hold a single run. Each step's field block is read once and all stations
+are picked from it. A `missing` at a station is an error. Member order is
+the file's.
 """
-function read_init_forecasts(ds::CfGRIB.DataSet, varname, stations; itime = 1, F = Float64)
-    var = ds.variables[varname]
-    lat, lon = ds.variables["latitude"].data, ds.variables["longitude"].data
+function read_init_forecasts(ds::GRIBDataset, varname, stations; F = Float64)
+    var = ds[varname]
+    d = GRIBDatasets.dimnames(var)
+    # ponytail: ECMWF ENS files always come out of GRIBDatasets in this order;
+    # anything else (e.g. one member, which it squeezes away) is an error.
+    (length(d) == 5 && d[[1, 2, 4, 5]] == ["lon", "lat", "number", "valid_time"]) ||
+        throw(ArgumentError("unexpected dimensions $d"))
+    lat, lon = ds["lat"][:], ds["lon"][:]
     ilat = [argmin(abs.(lat .- s[1])) for s in stations]
     ilon = [argmin(abs.(mod.(lon .- s[2] .+ 180, 360) .- 180)) for s in stations]  # 0–360 vs ±180 safe
     steps = lead_times(ds)
+    t0 = init_time(ds)
     fcs = [Vector{Forecast{Hour,F}}(undef, length(steps)) for _ in stations]
     for (k, h) in enumerate(steps)
-        block = _block(var, itime, k)
+        block = var[:, :, 1, :, k]                 # (lon, lat, number)
         for s in eachindex(stations)
-            m = block[:, ilon[s], ilat[s]]
+            m = block[ilon[s], ilat[s], :]
             any(ismissing, m) && error("missing $varname at $(stations[s]), step $h")
             fcs[s][k] = Forecast(h, F.(m))
         end
     end
-    t0 = init_times(ds)[itime]
     return [InitForecast(t0, f, false) for f in fcs]
 end
 
 read_init_forecasts(path::AbstractString, args...; kw...) =
-    read_init_forecasts(DataSet(path), args...; kw...)
+    read_init_forecasts(GRIBDataset(path), args...; kw...)
 
 
 "ECMWF open-data root; keeps only the last few days of runs."
@@ -94,7 +88,7 @@ Fetch only the perturbed ensemble members (`type = pf`) of the surface
 parameters `params` (ECMWF short names, e.g. `("2t",)`) for the given
 `steps` (hours) of the open-data ENS run initialised at `date` (`Date`)
 and `hour` (`"00"`, `"06"`, `"12"`, `"18"`), concatenating the GRIB
-messages into `out_path`. Byte-range download as in the CfGRIB.jl manual.
+messages into `out_path` (byte-range requests driven by the run's `.index` files).
 `members` restricts the download to those member numbers (default: all 50).
 
 Files live under `base_url` at

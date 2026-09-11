@@ -8,7 +8,7 @@ Steps
 1. Read the station CSV (30-min means) into `Observations` for temperature
    and for dew point (derived from temperature and relative humidity).
 2. Read a set of archived ECMWF ENS GRIB files (one per initialisation,
-   same initialisation hour) with the CfGRIB interface.
+   same initialisation hour) with GRIBDatasets.jl.
 3. Build one `TrainingObject` per lead time on a training subset of runs,
    fit the MBM parameters with the CRPS LP, and evaluate the CRPS of raw
    and corrected ensembles on the held-out runs.
@@ -44,7 +44,7 @@ utc_offset_h = 0
  =#
 
 using Dates, CSV, DataFrames, Statistics, Printf
-for f in ("data_structures.jl", "MBM.jl", "training.jl", "parse_cfgrib.jl")
+for f in ("data_structures.jl", "MBM.jl", "training.jl", "parse_grib.jl")
     include(joinpath(@__DIR__, "..", "src", f))
 end
 
@@ -95,8 +95,8 @@ grib_files = sort(filter(f -> endswith(f, ".grib2"), readdir(GRIB_DIR; join = tr
 runs_t = InitForecast{Hour,Float64}[]
 runs_td = InitForecast{Hour,Float64}[]
 for f in grib_files
-    ds = DataSet(f)
-    hour(init_times(ds)[1]) == INIT_HOUR || continue
+    ds = GRIBDataset(f)
+    hour(init_time(ds)) == INIT_HOUR || continue
     push!(runs_t, read_init_forecasts(ds, "t2m", [STATION])[1])
     push!(runs_td, read_init_forecasts(ds, "d2m", [STATION])[1])
 end

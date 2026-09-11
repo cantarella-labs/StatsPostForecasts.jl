@@ -144,9 +144,9 @@ function dtc(t, T₀, Tₐ, tₘ, θ, u, ω)
     if t < tₛ
         return T₀ + Tₐ * cos(π / ω * (t - tₘ))
     else
-        c  = cos(θ)
+        c = cos(θ)
         δT = u * Tₐ * c
-        k  = ω / π * (1 - u) * cot(θ)
+        k = ω / π * (1 - u) * cot(θ)
         return (T₀ + δT) + Tₐ * c * (1 - u) * exp(-(t - tₛ) / k)
     end
 end
@@ -165,7 +165,7 @@ hump), Tₐ must be positive.
 """
 function dtc_bounds(ω; θmin = 0.2, θmax = π / 2 - 0.05, umin = -1.0, umax = 0.95)
     lower = [-Inf, 0.1, 12 - ω / 2, θmin, umin]
-    upper = [ Inf, Inf, 12 + ω / 2, θmax, umax]
+    upper = [Inf, Inf, 12 + ω / 2, θmax, umax]
     return lower, upper
 end
 
@@ -180,7 +180,7 @@ function dtc_initial(t, T, ω; tₘ = 12.5, tₛ = 17.0, δT = 0.5)
     lower, upper = dtc_bounds(ω)
     T₀ = minimum(T)
     Tₐ = max(maximum(T) - T₀, 0.5)
-    θ  = clamp(π / ω * (tₛ - tₘ), lower[4], upper[4])
-    u  = clamp(δT / (Tₐ * cos(θ)), lower[5], upper[5])
+    θ = clamp(π / ω * (tₛ - tₘ), lower[4], upper[4])
+    u = clamp(δT / (Tₐ * cos(θ)), lower[5], upper[5])
     return [T₀, Tₐ, clamp(tₘ, lower[3], upper[3]), θ, u]
 end
