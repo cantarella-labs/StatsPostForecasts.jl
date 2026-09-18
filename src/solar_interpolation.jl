@@ -1,4 +1,4 @@
-import Dates: DateTime, Date, Day, Dates, dayofyear
+import Dates: DateTime, Date, Day, Hour, Minute, Dates, dayofyear
 import Statistics: median
 #=
 Diurnal temperature cycle (DTC) model

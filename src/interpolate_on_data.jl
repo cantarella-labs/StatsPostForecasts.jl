@@ -260,14 +260,15 @@ function interpolate_forecast(fc_times::AbstractVector{DateTime},
     linear = LinearInterpolation(fc_values, Dates.value.(fc_times);
                                  extrapolation = ExtrapolationType.Linear)
 
-    for w in sunrise_windows(fc_times, ϕ, λ)
-        # output times of this window, using the same edges as the forecast mask
-        mask_out = if w.mask[1] && !any(@view w.mask[2:end])
-            out_times .< w.t_end
-        else
-            first_t = fc_times[findfirst(w.mask)]
-            (out_times .>= first_t) .& (out_times .< w.t_end)
-        end
+    windows = sunrise_windows(fc_times, ϕ, λ)
+    t_start = typemin(DateTime)        # the first window also owns what precedes it
+    for (i, w) in enumerate(windows)
+        # a window owns the output times of its own sunrise-to-sunrise span, and
+        # the last one everything after it, so the tiling leaves no output time
+        # unassigned — a forecast point need not sit on the window edge
+        upper = i == length(windows) ? typemax(DateTime) : w.t_end
+        mask_out = (out_times .>= t_start) .& (out_times .< upper)
+        t_start = w.t_end
         any(mask_out) || continue
 
         t_fc  = window_solar_hours(fc_times[w.mask], w, λ)
