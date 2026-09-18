@@ -25,7 +25,8 @@ export Forecast,
     download_ecmwf_ens,
     ECMWF_OPEN_DATA,
     ECMWF_GCS_MIRROR,
-    ECMWF_AWS_MIRROR
+    ECMWF_AWS_MIRROR,
+    interpolate_forecast
 
 
 end

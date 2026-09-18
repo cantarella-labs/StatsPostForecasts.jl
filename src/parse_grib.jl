@@ -63,8 +63,12 @@ const ECMWF_GCS_MIRROR = "https://storage.googleapis.com/ecmwf-open-data"
 "AWS mirror of ECMWF open data; same archive, but often answers `503 SlowDown`."
 const ECMWF_AWS_MIRROR = "https://ecmwf-forecasts.s3.eu-central-1.amazonaws.com"
 
-# ponytail: S3 answers "503 SlowDown" under load; back off and retry, no smarter client.
+# ponytail: S3 answers "503 SlowDown" under load and a long fetch sometimes just
+# stalls; back off and retry, no smarter client.
 # Fetches into memory so a failed attempt never leaves partial bytes in the output file.
+# `status == 0` means curl gave up before any HTTP response — a stalled transfer
+# ("Operation too slow"), a reset connection, a DNS hiccup. Those are exactly the
+# transient failures worth retrying, and a run of thousands of messages meets them.
 function _fetch(url; kw...)
     for attempt in 1:6
         try
@@ -73,7 +77,7 @@ function _fetch(url; kw...)
             (
                 attempt < 6 &&
                 e isa Downloads.RequestError &&
-                e.response.status in (429, 503)
+                (e.response.status in (429, 503) || e.response.status == 0)
             ) || rethrow()
             sleep(2.0^attempt)
         end
