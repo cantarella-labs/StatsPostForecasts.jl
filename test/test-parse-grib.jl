@@ -10,10 +10,11 @@
     mkpath(dirname(path))
     isfile(path) || SPF.download_ecmwf_ens(date, "00", ("2t",), (0, 6), path; members = 1:3)
 
-    ds = SPF.DataSet(path)
-    @test ds.variables["t2m"].dimensions == ("number", "step", "longitude", "latitude")
-    @test ds.variables["number"].data == [1, 2, 3]
-    @test SPF.init_times(ds) == [DateTime(date)]
+    ds = SPF.GRIBDataset(path)
+    @test SPF.GRIBDatasets.dimnames(ds["t2m"]) ==
+          ["lon", "lat", "heightAboveGround", "number", "valid_time"]
+    @test ds["number"][:] == [1, 2, 3]
+    @test SPF.init_time(ds) == DateTime(date)
     @test SPF.lead_times(ds) == [Hour(0), Hour(6)]
 
     station = (39.13, -3.10)                          # Argamasilla de Alba
@@ -25,9 +26,9 @@
     @test all(f -> all(250 .< f.ensemble .< 320), r.forecasts)   # K, plausible for Spain
 
     # members come out in file order, straight from the raw field
-    lat, lon = ds.variables["latitude"].data, ds.variables["longitude"].data
+    lat, lon = ds["lat"][:], ds["lon"][:]
     i, j = argmin(abs.(lon .- station[2])), argmin(abs.(lat .- station[1]))
-    @test r.forecasts[2].ensemble == ds.variables["t2m"].data[:, 2, i, j]
+    @test r.forecasts[2].ensemble == ds["t2m"][i, j, 1, :, 2]
 
     # the same station on the 0–360 convention hits the same grid point
     r360 = SPF.read_init_forecasts(ds, "t2m", [(station[1], station[2] + 360)])[1]

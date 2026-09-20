@@ -3,7 +3,10 @@ module StatsPostForecasts
 include("data_structures.jl")
 include("MBM.jl")
 include("training.jl")
-include("parse_cfgrib.jl")
+include("parse_grib.jl")
+include("solar_interpolation.jl")
+include("interpolate_on_data.jl")
+include("evaluating.jl")
 
 export Forecast,
     InitForecast,
@@ -18,12 +21,16 @@ export Forecast,
     mbm_correction!,
     mean_abs_diff,
     read_init_forecasts,
-    init_times,
+    init_time,
     lead_times,
     download_ecmwf_ens,
     ECMWF_OPEN_DATA,
     ECMWF_GCS_MIRROR,
-    ECMWF_AWS_MIRROR
+    ECMWF_AWS_MIRROR,
+    interpolate_forecast,
+    correct,
+    crps,
+    evaluate_forecast
 
 
 end

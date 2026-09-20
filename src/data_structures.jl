@@ -181,10 +181,11 @@ end
 """
     MBMParameters{P, F}
 
-Fitted MBM parameters for one lead time.
+Fitted MBM parameters for one init time (ECMWF: 00 or 12h maybe 06 and 18h).
 
 # Fields
-- `lead_time::P`.
+- `init_time::M`
+- `lead_times::AstractVector{P}`.
 - `p::Vector{F}`: `(α, β, γ₁, γ₂)`, in the order expected by
   `mbm_correction!` and `crps_min`.
 - `window::Tuple{DateTime, DateTime}`: first and last initialisation time of
@@ -198,9 +199,10 @@ A full parameter table for one location/variable is a `Vector{MBMParameters}`
 indexed by lead time; keep separate tables per initialisation hour
 (00 UTC and 12 UTC runs are not pooled).
 """
-struct MBMParameters{P<:Period,F<:Real}
-    lead_time::P
-    p::Vector{F}
+struct MBMParameters{M<:Period,P<:Period,F<:Real}
+    init_time::M
+    lead_times::AbstractVector{P}
+    p::Dict{P,AbstractVector{F}}
     window::Tuple{DateTime,DateTime}
-    crps_train::F
+    crps_train::AbstractVector{F}
 end

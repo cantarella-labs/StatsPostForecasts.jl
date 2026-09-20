@@ -1,4 +1,4 @@
-import Dates: DateTime, Date, Day, Dates, dayofyear
+import Dates: DateTime, Date, Day, Hour, Minute, Dates, dayofyear
 import Statistics: median
 #=
 Diurnal temperature cycle (DTC) model
@@ -99,7 +99,32 @@ function daylight_hours(φ, δ)
     x = clamp(-tand(φ) * tand(δ), -1.0, 1.0)
     return 2 / 15 * acosd(x)
 end
+"""
+    solar_noon(λ, eot_min)
+Return in hours of the day the solar noon (real value) (UTC)
+"""
+function solar_noon(λ, eot_min)::Real
+    return 12 - λ/15 - eot_min/60
+end
+"""
+    sunrise_sunset(ref_day::Date, λ, eot_min)::(DateTime, DateTime)
+returns the sunrise and sunset times of a given day(ref_day), based on its latitude(ϕ),
+longitude (λ), solar declination (δ) and equation of time (eot_min)
+"""
+function sunrise_sunset(ref_day::Date, ϕ, λ, δ, eot_min)
+    daylight_h = daylight_hours(ϕ, δ)
+    solar_n = solar_noon(λ, eot_min)
+    sunrise_hour = solar_n - daylight_h/2
+    sunset_hour = solar_n + daylight_h/2
+    h_sunrise = floor(Int, sunrise_hour)
+    m_sunrise = floor(Int, (sunrise_hour - h_sunrise)*60)
+    h_sunset = floor(Int, sunset_hour)
+    m_sunset = floor(Int, (sunset_hour - h_sunset)*60)
 
+    sunrise = DateTime(ref_day) + Hour(h_sunrise) + Minute(m_sunrise)
+    sunset = DateTime(ref_day) + Hour(h_sunset) + Minute(m_sunset)
+    return (sunrise, sunset)
+end
 """
     solar_hours(t_utc::DateTime, ref_day::Date, λ, eot_min) -> t in hours
 
@@ -118,6 +143,25 @@ function solar_hours(t_utc::DateTime, ref_day::Date, λ, eot_min)
     return h + λ / 15 + eot_min / 60
 end
 
+"""
+    equation_of_time(year, dayofyear) -> minutes
+
+Equation of time: apparent solar time minus mean solar time, in minutes,
+positive when the sun is ahead of the clock. It swings roughly ±15 min over
+the year from the eccentricity of the orbit and the obliquity of the
+ecliptic, and enters [`solar_hours`](@ref) and [`solar_noon`](@ref) as the
+`eot_min` argument.
+
+This is the usual two-term approximation, good to a few seconds. Pass the
+product's own routine to [`sunrise_windows`](@ref) via its `eot` keyword if
+you need better.
+"""
+function equation_of_time(y, d)
+    D = 6.24004077 + 0.01720197*(365.24*(y-2000) + d)
+    return -7.659*sin(D) + 9.863*sin(2*D + 3.5932) #minutes
+end
+
+
 
 # "Start of attenuation tₛ = tₘ + ω/π·θ [h]."
 # ts(p::DTCParams) = p.tₘ + p.ω / π * p.θ
@@ -128,59 +172,50 @@ end
 
 
 """
-    dtc(t, T₀, Tₐ, tₘ, θ, u, ω) -> T
+    dtc(t, T₀, Tₐ, tₘ, θ, k, ω) -> T
 
 Diurnal-cycle temperature at solar hour `t` (paper Eq. 1) in the bounded
-parametrisation. Using Tₐ·cosθ − δT = Tₐ·cosθ·(1 − u):
-
+parametrisation. Using Tₐ·cosθ − δT = Ta⋅π/ω⋅sinθ
     t <  tₛ:  T₀ + Tₐ·cos(π/ω·(t − tₘ))
-    t ≥ tₛ:  (T₀ + δT) + Tₐ·cosθ·(1 − u)·exp(−(t − tₛ)/k)
+    t ≥ tₛ:  (T₀ + δT) + πk/ω·sinθ·exp(−(t − tₛ)/k)
 
-with tₛ, δT, k as in `DTCParams`. Scalar, allocation-free; safe to call
-from an optimiser's inner loop.
+Parametrisation used here
+-------------------------
+Instead of (tₛ, δT) the model is written in
+
+    θ = π/ω·(tₛ − tₘ)   ∈ (0, π)      tₛ = tₘ + ω/π·θ
+    k > 0                              free
+
+and δT follows from slope continuity (Eq. 5):
+
+    δT = Tₐ·(cosθ − (πk/ω)·sinθ)
+
+so the exponential branch has amplitude a = Tₐ·(πk/ω)·sinθ > 0 and
+value continuity at tₛ holds: T₀ + δT + a = T₀ + Tₐ·cosθ.
+Fitted vector: x = (T₀, Tₐ, tₘ, θ, k); ω is a known input per day.
 """
-function dtc(t, T₀, Tₐ, tₘ, θ, u, ω)
+function dtc(t, T₀, Tₐ, tₘ, θ, k, ω)
     tₛ = tₘ + ω / π * θ
-    if t < tₛ
-        return T₀ + Tₐ * cos(π / ω * (t - tₘ))
-    else
-        c  = cos(θ)
-        δT = u * Tₐ * c
-        k  = ω / π * (1 - u) * cot(θ)
-        return (T₀ + δT) + Tₐ * c * (1 - u) * exp(-(t - tₛ) / k)
-    end
+    δT = Tₐ*(cos(θ) - k*π/ω*sin(θ))
+    a = Tₐ * k * π/ω*sin(θ)
+    return t < tₛ ? T₀ + Tₐ * cos(π / ω * (t - tₘ)) : (T₀ + δT) + a * exp(-(t - tₛ) / k)
 end
 
 # ------------------------------------------------------------------ fitting
 
-"""
-    dtc_bounds(ω; θmin=0.2, θmax=π/2 - 0.05, umin=-1.0, umax=0.95)
-        -> (lower, upper)
 
-Box constraints for the fitted vector (T₀, Tₐ, tₘ, θ, u). The θ and u
-bounds are what make k > 0 and keep the optimiser away from the two
-degenerate corners: θ → 0 (k → ∞, flat evening) and u → 1 (k → 0, step
-cooling). T₀ and tₘ are only loosely bounded (tₘ within the daylight
-hump), Tₐ must be positive.
-"""
-function dtc_bounds(ω; θmin = 0.2, θmax = π / 2 - 0.05, umin = -1.0, umax = 0.95)
-    lower = [-Inf, 0.1, 12 - ω / 2, θmin, umin]
-    upper = [ Inf, Inf, 12 + ω / 2, θmax, umax]
-    return lower, upper
-end
+# """
+#     dtc_initial(t, T, ω; tₘ=12.5, tₛ=17.0, δT=0.5) -> Vector
 
-"""
-    dtc_initial(t, T, ω; tₘ=12.5, tₛ=17.0, δT=0.5) -> Vector
-
-Initial parameter vector following the paper: T₀ and Tₐ from the window's
-minimum and maximum, tₘ = 12.5 h, tₛ = 17 h and δT = 0.5 K translated to
-θ = π/ω·(tₛ − tₘ) and u = δT/(Tₐ·cosθ), each clamped into `dtc_bounds`.
-"""
-function dtc_initial(t, T, ω; tₘ = 12.5, tₛ = 17.0, δT = 0.5)
-    lower, upper = dtc_bounds(ω)
-    T₀ = minimum(T)
-    Tₐ = max(maximum(T) - T₀, 0.5)
-    θ  = clamp(π / ω * (tₛ - tₘ), lower[4], upper[4])
-    u  = clamp(δT / (Tₐ * cos(θ)), lower[5], upper[5])
-    return [T₀, Tₐ, clamp(tₘ, lower[3], upper[3]), θ, u]
-end
+# Initial parameter vector following the paper: T₀ and Tₐ from the window's
+# minimum and maximum, tₘ = 12.5 h, tₛ = 17 h and δT = 0.5 K translated to
+# θ = π/ω·(tₛ − tₘ) and u = δT/(Tₐ·cosθ), each clamped into `dtc_bounds`.
+# """
+# function dtc_initial(t, T, ω; tₘ = 12.5, tₛ = 17.0, δT = 0.5, k = )
+#     T₀ = minimum(T)
+#     Tₐ = max(maximum(T) - T₀, 0.5)
+#     θ = clamp(π / ω * (tₛ - tₘ), 0, π)
+#     k = 
+#     u = clamp(δT / (Tₐ * cos(θ)), lower[5], upper[5])
+#     return [T₀, Tₐ, clamp(tₘ, lower[3], upper[3]), θ, u]
+# end

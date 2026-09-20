@@ -16,7 +16,11 @@ and this project adheres to [Semantic Versioning].
 - Focus on ECMWF ensemble forecast, but should work for every ensemble forecast.
 - Fit MBM coefficients by minimizing CRPS. Fit is done via Linear Programming using JUMP (fit_crps) and also using nonlinear optimization using LBFGS using Optim (fit_crps_naive)
 
-- TODO: make the forecast machinery to 1. use unsampled forecast and adjust it based on the latest coefficients and 2. interpolate the results for a fine grained time profile. (for temp we will use a solar sunlight based model)
+- Apply fitted coefficients to a new, unseen run with `mbm_correction!`.
+- Sub-daily interpolation of a corrected forecast (`interpolate_forecast`): the
+  diurnal temperature cycle of Göttsche and Olesen (2001) is fitted per
+  sunrise-to-sunrise window and evaluated on the fine grid, with the fit residual
+  added back so the curve still passes through the forecast values.
 
 <!-- Links -->
 

@@ -10,7 +10,7 @@ the directory is deleted; only the extracted ensembles are kept, in CACHE,
 so re-running this script skips straight to the fit. Defaults: 10 members,
 +12 h and +24 h, about 19k requests, ~30 min at 8 concurrent downloads.
 
-Run:  julia --project examples/full_fit.jl
+Run:  julia --project=examples examples/full_fit.jl
 =#
 
 # Station metadata
@@ -26,6 +26,7 @@ utc_offset_h = 0
  =#
 using Dates, Printf, Serialization, Statistics
 using StatsPostForecasts
+include("siar.jl")
 
 const STATION = (39.13, -3.10)                 # Argamasilla de Alba, (lat, lon)
 const CSV_PATH = joinpath(
@@ -38,17 +39,7 @@ const MEMBERS = 1:10
 const STEPS = (12, 24)
 const RUN_DATES = Date(2024, 2, 29):Day(1):Date(2026, 7, 20)   # first 0.25° ENS run on the mirror
 
-# ---- 1. observations (same reader as the quickstart)
-function read_siar_temperature(path)
-    times, temp = DateTime[], Float64[]
-    for line in Iterators.drop(eachline(path), 1)
-        f = split(line, ',')
-        t = DateTime(f[1] * " " * f[2], dateformat"dd/mm/yyyy H:M")
-        push!(times, f[2] == "24:00" ? t - Day(1) : t)    # "24:00" is 00:00 of that date
-        push!(temp, parse(Float64, f[3]) + 273.15)
-    end
-    return Observations(times, temp)
-end
+# ---- 1. observations (reader in siar.jl)
 obs = read_siar_temperature(CSV_PATH)
 
 # ---- 2. forecasts: fetch what the cache lacks, 8 runs at a time, saving every 40
@@ -92,9 +83,16 @@ println(
     rpad("CRPS mbm", 12),
     "(α, β, γ₁, γ₂)",
 )
-table = map(Hour.(STEPS)) do lt
+leads = collect(Hour.(STEPS))   # STEPS is a tuple here; the struct wants a vector
+pbylead = Dict{Hour,AbstractVector{Float64}}()
+crps_train = Float64[]
+window = (DateTime(0), DateTime(0))
+for lt in leads
     t = TrainingObject(inits, obs, lt)
     p, _ = fitting_crps(t)
+    pbylead[lt] = p
+    push!(crps_train, crps_min(p, t))
+    global window = extrema(t.init_times)
     @printf(
         "%-10s%-6d%-12.3f%-12.3f(%.2f, %.3f, %.3f, %.3f)\n",
         string(lt),
@@ -106,6 +104,7 @@ table = map(Hour.(STEPS)) do lt
         p[3],
         p[4]
     )
-    MBMParameters(lt, p, extrema(t.init_times), crps_min(p, t))
 end
+# one MBMParameters per initialisation hour, holding every lead time
+table = MBMParameters(Hour(0), leads, pbylead, window, crps_train)
 serialize(joinpath(dirname(CACHE), "argamasilla_2t_00z_mbm.jls"), table)

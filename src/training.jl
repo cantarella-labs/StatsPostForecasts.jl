@@ -4,7 +4,7 @@ using Optim, ADTypes, ForwardDiff
 #=
 Fitting the MBM parameters by CRPS minimisation
 ================================================
- 
+
 The CRPS MIN objective `crps_min` is convex and piecewise linear in the
 parameters θ = (α, β, γ₁, γ₂). It is therefore solved exactly as a linear
 program rather than with a generic nonlinear optimiser. The absolute values
@@ -12,7 +12,7 @@ are removed with the epigraph reformulation: every residual gets an
 auxiliary variable t that is bounded below by ±residual, and the sum of the
 t's is minimised in their place. At the optimum every t equals the absolute
 residual, so the LP objective equals `crps_min` at the same θ.
- 
+
 The paper (Van Schaeybroeck & Vannitsem 2015, Sect. 3.5) gives no solver;
 it only notes the N·M cost of the objective. It also imposes no reliability
 constraints on CRPS MIN (Table 1 marks CR/WER/SER as "±", i.e. satisfied

@@ -13,7 +13,7 @@ written "24:00" with the date of the day it starts ("02/01/2024,24:00" sits
 between 01/01 23:30 and 02/01 0:30); Dates parses 24:00 as the next day,
 hence the one-day shift below.
 
-Run from the package directory:  julia --project examples/quickstart.jl
+Run:  julia --project=examples examples/quickstart.jl
 =#
 
 # Station metadata
@@ -30,6 +30,7 @@ utc_offset_h = 0
 
 using Dates
 using StatsPostForecasts
+include("siar.jl")
 
 const STATION = (39.13, -3.10)                  # Argamasilla de Alba, (lat, lon)
 const CSV_PATH = joinpath(
@@ -41,16 +42,8 @@ const GRIB_DIR = joinpath(@__DIR__, "grib")
 const DATES = Date(2026, 7, 14):Day(1):Date(2026, 7, 19)
 mkpath(GRIB_DIR)
 
-# ---- 1. observations: 2 m temperature in K. CSV columns: Fecha,Hora,Temp_Media_C,...
-obs = let times = DateTime[], temp = Float64[]
-    for line in Iterators.drop(eachline(CSV_PATH), 1)
-        f = split(line, ',')
-        t = DateTime(f[1] * " " * f[2], dateformat"dd/mm/yyyy H:M")
-        push!(times, f[2] == "24:00" ? t - Day(1) : t)
-        push!(temp, parse(Float64, f[3]) + 273.15)
-    end
-    Observations(times, temp)
-end
+# ---- 1. observations: 2 m temperature in K (reader in siar.jl)
+obs = read_siar_temperature(CSV_PATH)
 @info "observations" first(obs.times) last(obs.times) length(obs.times)
 
 # ---- 2. forecasts: one file per run, 10 members at +12 h and +24 h (~13 MB each)

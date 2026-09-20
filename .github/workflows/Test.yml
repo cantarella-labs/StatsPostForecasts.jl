@@ -23,8 +23,8 @@ jobs:
       fail-fast: false
       matrix:
         version:
-          # pinned to 1.12 for now; the test suite failed on 1.11
-          - "1.12"
+          # we are in version 1.13. it should work fine. skipe older versions
+          - "1"
         os:
           - ubuntu-latest
           - macOS-latest

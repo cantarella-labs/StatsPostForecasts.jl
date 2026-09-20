@@ -8,6 +8,22 @@
 [![DOI](https://zenodo.org/badge/DOI/FIXME)](https://doi.org/FIXME)
 [![BestieTemplate](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/JuliaBesties/BestieTemplate.jl/main/docs/src/assets/badge.json)](https://github.com/JuliaBesties/BestieTemplate.jl)
 
+## Examples
+
+`examples/` is its own project, so the plotting and DataFrames packages the
+examples want stay out of the package itself:
+
+```sh
+julia --project=examples examples/end_to_end.jl
+```
+
+- `end_to_end.jl` — the whole thing at one station: fit the MBM on a month of past
+  ENS runs (one parameter set per initialisation hour and lead time), correct the
+  following week of runs with it, interpolate each onto the 30-minute grid through
+  the diurnal cycle, and compare all of it with what the station measured.
+- `quickstart.jl` — six runs, two lead times, in-sample CRPS. The cheap one.
+- `full_fit.jl` — the whole station record (a long download, cached).
+
 ## How to Cite
 
 If you use StatsPostForecasts.jl in your work, please cite using the reference given in [CITATION.cff](https://github.com/cantarella-labs/StatsPostForecasts.jl/blob/main/CITATION.cff).
