@@ -83,9 +83,16 @@ println(
     rpad("CRPS mbm", 12),
     "(α, β, γ₁, γ₂)",
 )
-table = map(Hour.(STEPS)) do lt
+leads = collect(Hour.(STEPS))   # STEPS is a tuple here; the struct wants a vector
+pbylead = Dict{Hour,AbstractVector{Float64}}()
+crps_train = Float64[]
+window = (DateTime(0), DateTime(0))
+for lt in leads
     t = TrainingObject(inits, obs, lt)
     p, _ = fitting_crps(t)
+    pbylead[lt] = p
+    push!(crps_train, crps_min(p, t))
+    global window = extrema(t.init_times)
     @printf(
         "%-10s%-6d%-12.3f%-12.3f(%.2f, %.3f, %.3f, %.3f)\n",
         string(lt),
@@ -97,6 +104,7 @@ table = map(Hour.(STEPS)) do lt
         p[3],
         p[4]
     )
-    MBMParameters(lt, p, extrema(t.init_times), crps_min(p, t))
 end
+# one MBMParameters per initialisation hour, holding every lead time
+table = MBMParameters(Hour(0), leads, pbylead, window, crps_train)
 serialize(joinpath(dirname(CACHE), "argamasilla_2t_00z_mbm.jls"), table)

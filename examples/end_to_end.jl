@@ -34,7 +34,7 @@ about 11 GB in total, some tens of minutes at 8 concurrent downloads.
 
 using Dates, Printf, Serialization, Statistics
 using DataFrames
-using GLMakie
+using CairoMakie
 using StatsPostForecasts
 include("siar.jl")
 
@@ -89,112 +89,101 @@ println("\nMBM fit, $(INIT_HOUR) UTC runs, $(length(train)) of them, " *
         "$(first(TRAIN_DATES)) … $(last(TRAIN_DATES))   (every 12 h shown)")
 println(rpad("lead", 10), rpad("N", 5), rpad("CRPS raw", 11), rpad("CRPS mbm", 11),
         "(α, β, γ₁, γ₂)")
-params = map(Hour.(STEPS)) do lt
+leads = Hour.(STEPS)
+pbylead = Dict{Hour,AbstractVector{Float64}}()
+crps_train = Float64[]
+window = (DateTime(first(TRAIN_DATES)), DateTime(last(TRAIN_DATES)))
+for lt in leads
     t = TrainingObject(train, obs, lt)
     p, _ = fitting_crps(t)
+    pbylead[lt] = p
+    push!(crps_train, crps_min(p, t))
     lt in REPORT_LEADS && @printf("%-10s%-5d%-11.3f%-11.3f(%.2f, %.3f, %.3f, %.3f)\n",
                                   string(lt), ncases(t), crps_min([0, 1, 1, 0], t),
                                   crps_min(p, t), p...)
-    MBMParameters(lt, p, extrema(t.init_times), crps_min(p, t))
 end
+# one table per initialisation hour — 00 and 12 UTC are never pooled
+params = MBMParameters(Hour(parse(Int, INIT_HOUR)), leads, pbylead, window, crps_train)
 
-"Apply the fitted parameters to every lead time of one run, member by member."
-function correct(run, params)
-    fcs = map(run.forecasts) do fc
-        p = params[findfirst(q -> q.lead_time == fc.lead_time, params)]
-        x = sort(fc.ensemble)                  # sorted, so member k is the k-th coldest
-        xc = similar(x)
-        mbm_correction!(xc, x, p.p, mean(x), mean_abs_diff(x))
-        Forecast(fc.lead_time, xc)
-    end
-    return InitForecast(run.timestamp, fcs, true)
-end
-
-"The run's valid times, and the 30-minute grid the product wants them on."
-function grids(run)
-    t = [run.timestamp + fc.lead_time for fc in run.forecasts]
-    return (fc_times = t, out_times = first(t):Minute(30):last(t))
-end
-
-# ---- 4. every held-out run: correct it, interpolate it, verify it
+# ---- 4. every held-out run: correct it, interpolate every member, score it
+#         `evaluate_forecast` does all three and returns the raw and corrected
+#         CRPS at every observation time inside the run's span
 ϕ, λ = STATION
+evals = [evaluate_forecast(runs[d], obs, params, ϕ, λ) for d in TEST_DATES]
+
 points = DataFrame(init = DateTime[], lead = Hour[],             # at the 3-hourly steps
                    observed = Float64[], raw = Float64[], mbm = Float64[])
-fine = DataFrame(init = DateTime[], time = DateTime[],           # on the 30-minute grid
-                 observed = Float64[], linear = Float64[], dtc = Float64[])
-
-for date in TEST_DATES
-    run = runs[date]
-    corrected = correct(run, params)
-
-    for (fc, cfc) in zip(run.forecasts, corrected.forecasts)
+for (d, ev) in zip(TEST_DATES, evals)
+    run = runs[d]
+    cor = correct(run, params)
+    for (fc, cfc) in zip(run.forecasts, cor.forecasts)
         y = observation_at(obs, run.timestamp + fc.lead_time)
         y === nothing && continue
         push!(points, (run.timestamp, fc.lead_time, y, mean(fc.ensemble), mean(cfc.ensemble)))
     end
-
-    fc_times, out_times = grids(corrected)
-    fc_values = [mean(fc.ensemble) for fc in corrected.forecasts]
-    dtc = interpolate_forecast(fc_times, fc_values, out_times, ϕ, λ)
-    chords =
-        interpolate_forecast(fc_times, fc_values, out_times, ϕ, λ; min_points = typemax(Int))
-    y = [observation_at(obs, t) for t in out_times]
-    keep = .!isnothing.(y)                     # the station misses a reading now and then
-    append!(fine, DataFrame(init = run.timestamp, time = collect(out_times)[keep],
-                            observed = Float64.(y[keep]), linear = chords[keep],
-                            dtc = dtc[keep]))
 end
 
 # ---- 5. what it bought, pooled over the week
 rmse(a, b) = sqrt(mean(abs2, a .- b))
+allraw = reduce(vcat, [ev.crps_raw for ev in evals])
+allcor = reduce(vcat, [ev.crps_corrected for ev in evals])
 println("\n$(length(TEST_DATES)) held-out runs, $(first(TEST_DATES)) … $(last(TEST_DATES)), " *
-        "each to +144 h, verified against the station (K)")
+        "each to +$(last(STEPS)) h, verified against the station (K)")
 @printf("  3-hourly, raw ensemble mean        RMSE = %.2f   (N = %d)\n",
         rmse(points.raw, points.observed), nrow(points))
 @printf("  3-hourly, MBM-corrected mean       RMSE = %.2f\n", rmse(points.mbm, points.observed))
-@printf("  30-minute, linear between the 3 h  RMSE = %.2f   (N = %d)\n",
-        rmse(fine.linear, fine.observed), nrow(fine))
-@printf("  30-minute, diurnal-cycle fit       RMSE = %.2f\n", rmse(fine.dtc, fine.observed))
+@printf("  30-minute, ensemble CRPS raw       %.3f   (N = %d)\n", mean(allraw), length(allraw))
+@printf("  30-minute, ensemble CRPS corrected %.3f\n", mean(allcor))
 
 bylead = combine(groupby(points, :lead),
                  [:raw, :observed] => rmse => :raw,
                  [:mbm, :observed] => rmse => :mbm,
                  nrow => :N)
-println("\nby lead time (K, every 12 h):")
+println("\nRMSE of the ensemble mean by lead time (K, every 12 h):")
 println(bylead[in(REPORT_LEADS).(bylead.lead), :])
 
-# ---- 6. the last run, all six days of it, ensemble and all
-run = runs[last(TEST_DATES)]
-corrected = correct(run, params)
-fc_times, out_times = grids(corrected)
-M = length(first(corrected.forecasts).ensemble)
-# members are sorted per lead time, so member 1 and member M are the envelope
-member(m) = interpolate_forecast(fc_times, [fc.ensemble[m] for fc in corrected.forecasts],
-                                 out_times, ϕ, λ)
-lo, hi = member(1), member(M)
-mid = interpolate_forecast(fc_times, [mean(fc.ensemble) for fc in corrected.forecasts],
-                           out_times, ϕ, λ)
-f = fine[fine.init .== run.timestamp, :]
+# ---- 6. the figure: the forecast itself, and what the CRPS does with lead time
+ev = last(evals)                                  # the last held-out run
+shown = runs[last(TEST_DATES)]
+lead_h(t) = Dates.value(t - shown.timestamp) / 3.6e6
+lo = [minimum(view(ev.corrected, i, :)) for i in eachindex(ev.times)]
+hi = [maximum(view(ev.corrected, i, :)) for i in eachindex(ev.times)]
+mid = [mean(view(ev.corrected, i, :)) for i in eachindex(ev.times)]
 
-# x is lead time in days: it is what the plot is about, and Makie's `band!`
-# does not take DateTime (`lines!` does, which is a trap worth avoiding here)
-lead_days(t) = Dates.value(t - run.timestamp) / 86_400_000
-fig = Figure(size = (1300, 520))
-ax = Axis(fig[1, 1];
-          xlabel = "lead time (days from $(run.timestamp) UTC)",
-          ylabel = "2 m temperature (°C)",
-          xticks = 0:(last(STEPS) ÷ 24),
-          title = "Argamasilla de Alba — ENS run $(run.timestamp), six days ahead")
-band!(ax, lead_days.(out_times), lo .- 273.15, hi .- 273.15;
+fig = Figure(size = (1400, 860))
+ax1 = Axis(fig[1, 1]; ylabel = "2 m temperature (°C)",
+           xticks = 0:24:last(STEPS),
+           title = "Argamasilla de Alba — ENS run $(shown.timestamp), $(last(STEPS) ÷ 24) days ahead")
+band!(ax1, lead_h.(ev.times), lo .- 273.15, hi .- 273.15;
       color = (:crimson, 0.18), label = "corrected ensemble, coldest to warmest member")
-lines!(ax, lead_days.(out_times), mid .- 273.15; color = :crimson, linewidth = 2,
+lines!(ax1, lead_h.(ev.times), mid .- 273.15; color = :crimson, linewidth = 2,
        label = "corrected ensemble mean, diurnal-cycle fit (30 min)")
-lines!(ax, lead_days.(fc_times), [mean(fc.ensemble) for fc in run.forecasts] .- 273.15;
-       color = :steelblue, linewidth = 1, linestyle = :dash,
-       label = "raw ensemble mean (3 h)")
-lines!(ax, lead_days.(f.time), f.observed .- 273.15; color = :black, linewidth = 1.5,
+lines!(ax1, lead_h.(ev.times), [mean(view(ev.raw, i, :)) for i in eachindex(ev.times)] .- 273.15;
+       color = :steelblue, linewidth = 1, linestyle = :dash, label = "raw ensemble mean")
+lines!(ax1, lead_h.(ev.times), ev.observed .- 273.15; color = :black, linewidth = 1.5,
        label = "station (30 min)")
-axislegend(ax; position = :lt, framevisible = false)
+axislegend(ax1; position = :lt, framevisible = false, labelsize = 11)
+
+# CRPS against lead time, averaged over every held-out run
+ax2 = Axis(fig[2, 1]; xlabel = "lead time (h)", ylabel = "ensemble CRPS (K)",
+           xticks = 0:24:last(STEPS),
+           title = "CRPS of the interpolated ensemble, mean over $(length(evals)) held-out runs")
+# keyed by lead time, not by position: a run with a missing observation must
+# not shift every later point into the wrong lead
+crpsdf = DataFrame(lead = Float64[], raw = Float64[], mbm = Float64[])
+for (d, e) in zip(TEST_DATES, evals), i in eachindex(e.times)
+    push!(crpsdf, (Dates.value(e.times[i] - runs[d].timestamp) / 3.6e6,
+                   e.crps_raw[i], e.crps_corrected[i]))
+end
+bylead_crps = sort(combine(groupby(crpsdf, :lead), :raw => mean => :raw,
+                           :mbm => mean => :mbm), :lead)
+lines!(ax2, bylead_crps.lead, bylead_crps.raw; color = :steelblue, linewidth = 1.5,
+       label = "raw ensemble")
+lines!(ax2, bylead_crps.lead, bylead_crps.mbm; color = :crimson, linewidth = 2,
+       label = "MBM-corrected ensemble")
+vlines!(ax2, 0:24:last(STEPS); color = (:black, 0.12))
+axislegend(ax2; position = :lt, framevisible = false, labelsize = 11)
+rowsize!(fig.layout, 2, Relative(0.36))
 png = joinpath(@__DIR__, "cache", "end_to_end.png")
 save(png, fig)
 println("\nfigure: $png")

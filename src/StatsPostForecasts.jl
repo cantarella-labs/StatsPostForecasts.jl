@@ -27,7 +27,10 @@ export Forecast,
     ECMWF_OPEN_DATA,
     ECMWF_GCS_MIRROR,
     ECMWF_AWS_MIRROR,
-    interpolate_forecast
+    interpolate_forecast,
+    correct,
+    crps,
+    evaluate_forecast
 
 
 end
