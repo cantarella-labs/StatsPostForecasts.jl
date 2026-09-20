@@ -38,9 +38,13 @@
     t0 = DateTime(2026, 1, 1)
     raw = [3.0, 1.0, 2.0, 5.0]                  # deliberately unsorted
     run = SPF.InitForecast(t0, [SPF.Forecast(Hour(6), copy(raw))], false)
-    pars(lt, p) = SPF.MBMParameters(Hour(0), [lt],
-                                    Dict{Hour,AbstractVector{Float64}}(lt => p),
-                                    (t0, t0), [0.0])
+    pars(lt, p) = SPF.MBMParameters(
+        Hour(0),
+        [lt],
+        Dict{Hour,AbstractVector{Float64}}(lt => p),
+        (t0, t0),
+        [0.0],
+    )
 
     # (α, β, γ₁, γ₂) = (0, 1, 1, 0) is the identity map: μ = x̄ and τ = 1
     id = SPF.correct(run, pars(Hour(6), [0.0, 1.0, 1.0, 0.0]))
@@ -73,7 +77,8 @@ end
     # sunrise-to-sunrise window for the diurnal-cycle fit rather than the fallback
     date = Dates.today() - Day(1)
     steps = 0:3:24
-    path = joinpath(@__DIR__, "data", "ens-2t-eval-$(Dates.format(date, "yyyymmdd"))00.grib2")
+    path =
+        joinpath(@__DIR__, "data", "ens-2t-eval-$(Dates.format(date, "yyyymmdd"))00.grib2")
     mkpath(dirname(path))
     isfile(path) || SPF.download_ecmwf_ens(date, "00", ("2t",), steps, path; members = 1:3)
 
@@ -83,15 +88,18 @@ end
 
     # observations every 30 min across the run. Only their timing matters to what
     # is asserted here; the forecast being scored is real ECMWF data.
-    grid = collect(run.timestamp:Minute(30):(run.timestamp + Hour(last(steps))))
+    grid = collect(run.timestamp:Minute(30):(run.timestamp+Hour(last(steps))))
     hrs = [Dates.value(t - run.timestamp) / 3.6e6 for t in grid]
     obs = SPF.Observations(grid, 290.0 .+ 5.0 .* sin.(2π .* hrs ./ 24))
 
     leads = [fc.lead_time for fc in run.forecasts]
     identity = SPF.MBMParameters(
-        Hour(0), leads,
+        Hour(0),
+        leads,
         Dict{Hour,AbstractVector{Float64}}(lt => [0.0, 1.0, 1.0, 0.0] for lt in leads),
-        (run.timestamp, run.timestamp), zeros(length(leads)))
+        (run.timestamp, run.timestamp),
+        zeros(length(leads)),
+    )
 
     ev = SPF.evaluate_forecast(run, obs, identity, ϕ, λ)
 

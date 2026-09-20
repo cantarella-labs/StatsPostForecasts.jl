@@ -15,11 +15,18 @@
         for w in SPF.sunrise_windows(fine, ϕ, λ)
             θ = π / w.ω * (tₛ - tₘ)
             k = w.ω / π * cot(θ)
-            truth[w.mask] .= SPF.dtc.(SPF.window_solar_hours(fine[w.mask], w, λ),
-                                      T₀, Tₐ, tₘ, θ, k, w.ω)
+            truth[w.mask] .=
+                SPF.dtc.(SPF.window_solar_hours(fine[w.mask], w, λ), T₀, Tₐ, tₘ, θ, k, w.ω)
             # value at the closing sunrise, re-expressed in the next window's frame
-            T_end = SPF.dtc(SPF.solar_hours(w.t_end, w.ref_date, λ, w.eot_min),
-                            T₀, Tₐ, tₘ, θ, k, w.ω)
+            T_end = SPF.dtc(
+                SPF.solar_hours(w.t_end, w.ref_date, λ, w.eot_min),
+                T₀,
+                Tₐ,
+                tₘ,
+                θ,
+                k,
+                w.ω,
+            )
             d = w.ref_date + Day(1)
             eot = SPF.equation_of_time(year(d), dayofyear(d))
             ω = SPF.daylight_hours(ϕ, SPF.declination_cooper(dayofyear(d)))
@@ -31,7 +38,8 @@
 
     fit = SPF.interpolate_forecast(fc_times, fc_values, fine, ϕ, λ)
     # min_points above the window size sends every window to the linear fallback
-    lin = SPF.interpolate_forecast(fc_times, fc_values, fine, ϕ, λ; min_points = typemax(Int))
+    lin =
+        SPF.interpolate_forecast(fc_times, fc_values, fine, ϕ, λ; min_points = typemax(Int))
 
     rmse(a, b) = sqrt(mean(abs2, a .- b))
     @test rmse(lin, truth) > 0.5                 # 3-hourly chords do lose the curvature

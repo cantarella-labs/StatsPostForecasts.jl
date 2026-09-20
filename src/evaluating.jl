@@ -89,14 +89,20 @@ Returns `(; times, observed, raw, corrected, crps_raw, crps_corrected)`, where
 `raw` and `corrected` are `length(times) × M` matrices with members sorted
 ascending per lead time.
 """
-function evaluate_forecast(run::InitForecast, obs::Observations, params::MBMParameters,
-                           ϕ, λ)
+function evaluate_forecast(
+    run::InitForecast,
+    obs::Observations,
+    params::MBMParameters,
+    ϕ,
+    λ,
+)
     corrected = correct(run, params)
     fc_times = [run.timestamp + fc.lead_time for fc in run.forecasts]
 
     keep = findall(t -> first(fc_times) <= t <= last(fc_times), obs.times)
-    isempty(keep) && throw(ArgumentError(
-        "no observations between $(first(fc_times)) and $(last(fc_times))"))
+    isempty(keep) && throw(
+        ArgumentError("no observations between $(first(fc_times)) and $(last(fc_times))"),
+    )
     times, y = obs.times[keep], obs.values[keep]
 
     M = length(first(run.forecasts).ensemble)
@@ -105,15 +111,27 @@ function evaluate_forecast(run::InitForecast, obs::Observations, params::MBMPara
     cor = Matrix{F}(undef, length(times), M)
     for m in 1:M
         raw[:, m] .= interpolate_forecast(
-            fc_times, [sort(fc.ensemble)[m] for fc in run.forecasts], times, ϕ, λ)
+            fc_times,
+            [sort(fc.ensemble)[m] for fc in run.forecasts],
+            times,
+            ϕ,
+            λ,
+        )
         cor[:, m] .= interpolate_forecast(
-            fc_times, [fc.ensemble[m] for fc in corrected.forecasts], times, ϕ, λ)
+            fc_times,
+            [fc.ensemble[m] for fc in corrected.forecasts],
+            times,
+            ϕ,
+            λ,
+        )
     end
 
-    return (times = times,
-            observed = y,
-            raw = raw,
-            corrected = cor,
-            crps_raw = [crps(view(raw, i, :), y[i]) for i in eachindex(times)],
-            crps_corrected = [crps(view(cor, i, :), y[i]) for i in eachindex(times)])
+    return (
+        times = times,
+        observed = y,
+        raw = raw,
+        corrected = cor,
+        crps_raw = [crps(view(raw, i, :), y[i]) for i in eachindex(times)],
+        crps_corrected = [crps(view(cor, i, :), y[i]) for i in eachindex(times)],
+    )
 end

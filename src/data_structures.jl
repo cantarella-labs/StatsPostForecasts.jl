@@ -202,7 +202,7 @@ indexed by lead time; keep separate tables per initialisation hour
 struct MBMParameters{M<:Period,P<:Period,F<:Real}
     init_time::M
     lead_times::AbstractVector{P}
-    p::Dict{P, AbstractVector{F}}
+    p::Dict{P,AbstractVector{F}}
     window::Tuple{DateTime,DateTime}
     crps_train::AbstractVector{F}
 end

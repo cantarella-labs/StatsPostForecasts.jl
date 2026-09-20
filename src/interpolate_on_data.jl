@@ -92,16 +92,21 @@ Returns one NamedTuple per non-empty window with
 solar routines can replace the paper's approximations; they are called
 as `declination(dayofyear)` and `eot(year, dayofyear)`.
 """
-function sunrise_windows(times::AbstractVector{DateTime}, ϕ, λ;
-                         declination = declination_cooper,
-                         eot = equation_of_time)
+function sunrise_windows(
+    times::AbstractVector{DateTime},
+    ϕ,
+    λ;
+    declination = declination_cooper,
+    eot = equation_of_time,
+)
     days = unique(Date.(times))
-    sunrises = [sunrise_sunset(d, ϕ, λ,
-                               declination(dayofyear(d)),
-                               eot(year(d), dayofyear(d)))[1] for d in days]
+    sunrises = [
+        sunrise_sunset(d, ϕ, λ, declination(dayofyear(d)), eot(year(d), dayofyear(d)))[1]
+        for d in days
+    ]
 
     windows = NamedTuple[]
-    for i in 1:(length(sunrises) + 1)
+    for i in 1:(length(sunrises)+1)
         mask = if i == 1
             times .< sunrises[1]
         elseif i == length(sunrises) + 1
@@ -117,11 +122,16 @@ function sunrise_windows(times::AbstractVector{DateTime}, ϕ, λ;
         ref_date = i == 1 ? Date(first_time) - Day(1) : Date(first_time)
         t_end = i == length(sunrises) + 1 ? times[findlast(mask)] : sunrises[i]
 
-        push!(windows, (mask = mask,
-                        ref_date = ref_date,
-                        ω = daylight_hours(ϕ, declination(dayofyear(ref_date))),
-                        eot_min = eot(year(ref_date), dayofyear(ref_date)),
-                        t_end = t_end))
+        push!(
+            windows,
+            (
+                mask = mask,
+                ref_date = ref_date,
+                ω = daylight_hours(ϕ, declination(dayofyear(ref_date))),
+                eot_min = eot(year(ref_date), dayofyear(ref_date)),
+                t_end = t_end,
+            ),
+        )
     end
     return windows
 end
@@ -154,8 +164,8 @@ cooling day.
 function dtc_initial(t, T, ω; tₘ = 12.5, tₛ = 17.0)
     T₀ = minimum(T)
     Tₐ = max(maximum(T) - T₀, 0.5)
-    θ  = clamp(π / ω * (tₛ - tₘ), 0.05, π - 0.05)
-    k  = ω / π * cot(θ)
+    θ = clamp(π / ω * (tₛ - tₘ), 0.05, π - 0.05)
+    k = ω / π * cot(θ)
     return [T₀, Tₐ, tₘ, θ, k]
 end
 
@@ -175,8 +185,7 @@ Box constraints for `[T₀, Tₐ, tₘ, θ, k]`.
 * `tₘ` is bounded loosely around solar noon; the fitted values in the
   paper sit between 12:13 and 13:24.
 """
-dtc_bounds() = ([-Inf, 1e-3, 6.0, 1e-3, 1e-3],
-                [ Inf,  Inf, 18.0, π - 1e-3, Inf])
+dtc_bounds() = ([-Inf, 1e-3, 6.0, 1e-3, 1e-3], [Inf, Inf, 18.0, π - 1e-3, Inf])
 
 """
     fit_dtc_window(t, T, ω; x0=dtc_initial(t, T, ω), fixed_shape=nothing)
@@ -201,15 +210,20 @@ uniformity.
 Throws if there are fewer points than free parameters; callers should
 fall back to linear interpolation in that case.
 """
-function fit_dtc_window(t::AbstractVector, T::AbstractVector, ω;
-                        x0 = dtc_initial(t, T, ω), fixed_shape = nothing)
+function fit_dtc_window(
+    t::AbstractVector,
+    T::AbstractVector,
+    ω;
+    x0 = dtc_initial(t, T, ω),
+    fixed_shape = nothing,
+)
     lb, ub = dtc_bounds()
     n = length(t)
 
     if fixed_shape === nothing
         n >= 5 || throw(ArgumentError("need ≥5 points to fit 5 parameters, got $n"))
         residual!(f, x) = (f .= T .- dtc.(t, x[1], x[2], x[3], x[4], x[5], ω))
-        jacobian!(J, x)  = ForwardDiff.jacobian!(J, residual!, zeros(eltype(x), n), x)
+        jacobian!(J, x) = ForwardDiff.jacobian!(J, residual!, zeros(eltype(x), n), x)
         sol = lm_trust_region!(residual!, jacobian!, copy(x0), n; lb = lb, ub = ub)
         return sol[1], sol
     else
@@ -217,8 +231,7 @@ function fit_dtc_window(t::AbstractVector, T::AbstractVector, ω;
         tₘ, θ, k = fixed_shape
         res2!(f, x) = (f .= T .- dtc.(t, x[1], x[2], tₘ, θ, k, ω))
         jac2!(J, x) = ForwardDiff.jacobian!(J, res2!, zeros(eltype(x), n), x)
-        sol = lm_trust_region!(res2!, jac2!, [x0[1], x0[2]], n;
-                               lb = lb[1:2], ub = ub[1:2])
+        sol = lm_trust_region!(res2!, jac2!, [x0[1], x0[2]], n; lb = lb[1:2], ub = ub[1:2])
         return [sol[1][1], sol[1][2], tₘ, θ, k], sol
     end
 end
@@ -250,15 +263,23 @@ level and amplitude per window; see `fit_dtc_window`.
 `fc_times` must be sorted and `out_times` should lie within their span
 (points outside are handled by the linear extrapolation of the fallback).
 """
-function interpolate_forecast(fc_times::AbstractVector{DateTime},
-                              fc_values::AbstractVector,
-                              out_times::AbstractVector{DateTime},
-                              ϕ, λ; fixed_shape = nothing, min_points = 5)
+function interpolate_forecast(
+    fc_times::AbstractVector{DateTime},
+    fc_values::AbstractVector,
+    out_times::AbstractVector{DateTime},
+    ϕ,
+    λ;
+    fixed_shape = nothing,
+    min_points = 5,
+)
     out = zeros(float(eltype(fc_values)), length(out_times))
 
     # whole-series linear interpolation, used as the fallback for short windows
-    linear = LinearInterpolation(fc_values, Dates.value.(fc_times);
-                                 extrapolation = ExtrapolationType.Linear)
+    linear = LinearInterpolation(
+        fc_values,
+        Dates.value.(fc_times);
+        extrapolation = ExtrapolationType.Linear,
+    )
 
     windows = sunrise_windows(fc_times, ϕ, λ)
     t_start = typemin(DateTime)        # the first window also owns what precedes it
@@ -271,8 +292,8 @@ function interpolate_forecast(fc_times::AbstractVector{DateTime},
         t_start = w.t_end
         any(mask_out) || continue
 
-        t_fc  = window_solar_hours(fc_times[w.mask], w, λ)
-        T_fc  = fc_values[w.mask]
+        t_fc = window_solar_hours(fc_times[w.mask], w, λ)
+        T_fc = fc_values[w.mask]
         t_out = window_solar_hours(out_times[mask_out], w, λ)
 
         if length(t_fc) < min_points
@@ -283,12 +304,14 @@ function interpolate_forecast(fc_times::AbstractVector{DateTime},
         x, _ = fit_dtc_window(t_fc, T_fc, w.ω; fixed_shape = fixed_shape)
 
         fitted_out = dtc.(t_out, x[1], x[2], x[3], x[4], x[5], w.ω)
-        fitted_fc  = dtc.(t_fc,  x[1], x[2], x[3], x[4], x[5], w.ω)
+        fitted_fc = dtc.(t_fc, x[1], x[2], x[3], x[4], x[5], w.ω)
 
         # residual add-back: linear in time, so the curve hits every forecast point
-        res = LinearInterpolation(T_fc .- fitted_fc,
-                                  Dates.value.(fc_times[w.mask]);
-                                  extrapolation = ExtrapolationType.Linear)
+        res = LinearInterpolation(
+            T_fc .- fitted_fc,
+            Dates.value.(fc_times[w.mask]);
+            extrapolation = ExtrapolationType.Linear,
+        )
         out[mask_out] .= fitted_out .+ res(Dates.value.(out_times[mask_out]))
     end
     return out

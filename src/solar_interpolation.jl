@@ -120,10 +120,9 @@ function sunrise_sunset(ref_day::Date, ϕ, λ, δ, eot_min)
     m_sunrise = floor(Int, (sunrise_hour - h_sunrise)*60)
     h_sunset = floor(Int, sunset_hour)
     m_sunset = floor(Int, (sunset_hour - h_sunset)*60)
-    
-    sunrise = DateTime(ref_day) + Hour(h_sunrise) +
-        Minute(m_sunrise)
-    sunset = DateTime(ref_day) +Hour(h_sunset) + Minute(m_sunset)
+
+    sunrise = DateTime(ref_day) + Hour(h_sunrise) + Minute(m_sunrise)
+    sunset = DateTime(ref_day) + Hour(h_sunset) + Minute(m_sunset)
     return (sunrise, sunset)
 end
 """
@@ -184,8 +183,8 @@ Fitted vector: x = (T₀, Tₐ, tₘ, θ, k); ω is a known input per day.
 """
 function dtc(t, T₀, Tₐ, tₘ, θ, k, ω)
     tₛ = tₘ + ω / π * θ
-    δT = Tₐ*(cos(θ)- k*π/ω*sin(θ))
-    a = Tₐ * k*π/ω*sin(θ)
+    δT = Tₐ*(cos(θ) - k*π/ω*sin(θ))
+    a = Tₐ * k * π/ω*sin(θ)
     return t < tₛ ? T₀ + Tₐ * cos(π / ω * (t - tₘ)) : (T₀ + δT) + a * exp(-(t - tₛ) / k)
 end
 
