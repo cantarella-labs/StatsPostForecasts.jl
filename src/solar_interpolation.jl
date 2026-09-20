@@ -143,6 +143,19 @@ function solar_hours(t_utc::DateTime, ref_day::Date, λ, eot_min)
     return h + λ / 15 + eot_min / 60
 end
 
+"""
+    equation_of_time(year, dayofyear) -> minutes
+
+Equation of time: apparent solar time minus mean solar time, in minutes,
+positive when the sun is ahead of the clock. It swings roughly ±15 min over
+the year from the eccentricity of the orbit and the obliquity of the
+ecliptic, and enters [`solar_hours`](@ref) and [`solar_noon`](@ref) as the
+`eot_min` argument.
+
+This is the usual two-term approximation, good to a few seconds. Pass the
+product's own routine to [`sunrise_windows`](@ref) via its `eot` keyword if
+you need better.
+"""
 function equation_of_time(y, d)
     D = 6.24004077 + 0.01720197*(365.24*(y-2000) + d)
     return -7.659*sin(D) + 9.863*sin(2*D + 3.5932) #minutes
