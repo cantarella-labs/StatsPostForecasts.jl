@@ -6,6 +6,7 @@ include("training.jl")
 include("parse_grib.jl")
 include("solar_interpolation.jl")
 include("interpolate_on_data.jl")
+include("evaluating.jl")
 
 export Forecast,
     InitForecast,
