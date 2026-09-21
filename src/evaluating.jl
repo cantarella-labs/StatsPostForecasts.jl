@@ -56,7 +56,7 @@ function correct(run::InitForecast, params::MBMParameters)
             throw(KeyError("no MBM parameters for lead time $(fc.lead_time)"))
         x = fc.ensemble
         xc = similar(x)
-        mbm_correction!(xc, x, params.p[fc.lead_time], mean(x), mean_abs_diff(x))
+        mbm_correction!(xc, x, params.p[fc.lead_time], mean(x), mean_abs_diff(sort(x)))
         Forecast(fc.lead_time, xc)
     end
     return InitForecast(run.timestamp, fcs, true)
