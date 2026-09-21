@@ -53,7 +53,7 @@
     # a known affine map: x̃ = α + β·x̄ + (γ₁ + γ₂/d)·(x − x̄)
     p = [2.0, 0.5, 1.5, 0.75]
     x = raw
-    x̄, d = mean(x), SPF.mean_abs_diff(x)
+    x̄, d = mean(x), SPF.mean_abs_diff(sort(x))
     @test SPF.correct(run, pars(Hour(6), p)).forecasts[1].ensemble ≈
           p[1] .+ p[2] * x̄ .+ (p[3] + p[4] / d) .* (x .- x̄)
 
