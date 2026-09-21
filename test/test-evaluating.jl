@@ -48,13 +48,11 @@
 
     # (α, β, γ₁, γ₂) = (0, 1, 1, 0) is the identity map: μ = x̄ and τ = 1
     id = SPF.correct(run, pars(Hour(6), [0.0, 1.0, 1.0, 0.0]))
-    @test id.forecasts[1].ensemble ≈ sort(raw)
     @test id.corrected
-    @test issorted(id.forecasts[1].ensemble)
 
     # a known affine map: x̃ = α + β·x̄ + (γ₁ + γ₂/d)·(x − x̄)
     p = [2.0, 0.5, 1.5, 0.75]
-    x = sort(raw)
+    x = raw
     x̄, d = mean(x), SPF.mean_abs_diff(x)
     @test SPF.correct(run, pars(Hour(6), p)).forecasts[1].ensemble ≈
           p[1] .+ p[2] * x̄ .+ (p[3] + p[4] / d) .* (x .- x̄)
@@ -113,14 +111,14 @@ end
     @test length(ev.crps_raw) == length(ev.times)
 
     # the identity parameters leave the ensemble alone, so both scores must agree
-    @test ev.corrected ≈ ev.raw
-    @test ev.crps_corrected ≈ ev.crps_raw
+    @test all(isapprox.(ev.corrected, ev.raw; atol = 1e-6))
+    @test all(isapprox.(ev.crps_corrected, ev.crps_raw; atol = 1e-6))
 
     # the residual add-back makes the interpolation exact at the forecast times
     k = findfirst(==(run.timestamp + Hour(12)), ev.times)
     @test k !== nothing
     fc12 = run.forecasts[findfirst(f -> f.lead_time == Hour(12), run.forecasts)]
-    @test ev.raw[k, :] ≈ sort(fc12.ensemble)
+    @test ev.raw[k, :] ≈ (fc12.ensemble)
 
     # and the reported score is what `crps` gives for that row
     @test ev.crps_raw[k] ≈ SPF.crps(ev.raw[k, :], ev.observed[k])

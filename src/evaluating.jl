@@ -112,7 +112,7 @@ function evaluate_forecast(
     for m in 1:M
         raw[:, m] .= interpolate_forecast(
             fc_times,
-            [sort(fc.ensemble)[m] for fc in run.forecasts],
+            [fc.ensemble[m] for fc in run.forecasts],
             times,
             ϕ,
             λ,
