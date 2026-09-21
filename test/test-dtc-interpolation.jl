@@ -59,4 +59,31 @@
     @test !any(iszero, fit)
     # the residual add-back reproduces the forecast values exactly
     @test SPF.interpolate_forecast(fc_times, fc_values, fc_times, ϕ, λ) ≈ fc_values
+
+    # Quick test with a ill-condiitoned system:
+
+    t = [
+        8.606572244235696,
+        11.606572244235696,
+        14.606572244235696,
+        17.606572244235696,
+        20.606572244235696,
+        23.606572244235696,
+        26.606572244235696,
+        29.606572244235696,
+    ]
+    T = [
+        276.3280334472656,
+        279.72369384765625,
+        282.4947204589844,
+        280.06300354003906,
+        277.80686950683594,
+        278.65545654296875,
+        279.20155334472656,
+        280.1933135986328,
+    ]
+    ω = 11.433423174345474
+
+    x, sol = SPF.fit_dtc_window(t, T, ω)
+    @test length(x) == 5 # x exist suffices in this test
 end
