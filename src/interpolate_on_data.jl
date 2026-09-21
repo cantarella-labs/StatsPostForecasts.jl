@@ -224,14 +224,14 @@ function fit_dtc_window(
         n >= 5 || throw(ArgumentError("need ≥5 points to fit 5 parameters, got $n"))
         residual!(f, x) = (f .= T .- dtc.(t, x[1], x[2], x[3], x[4], x[5], ω))
         jacobian!(J, x) = ForwardDiff.jacobian!(J, residual!, zeros(eltype(x), n), x)
-        sol = lm_trust_region!(residual!, jacobian!, copy(x0), n; lb = lb, ub = ub)
+        sol = lm_trust_region!(residual!, jacobian!, copy(x0), n, QRStrategy(); lb = lb, ub = ub)
         return sol[1], sol
     else
         n >= 2 || throw(ArgumentError("need ≥2 points to fit T₀ and Tₐ, got $n"))
         tₘ, θ, k = fixed_shape
         res2!(f, x) = (f .= T .- dtc.(t, x[1], x[2], tₘ, θ, k, ω))
         jac2!(J, x) = ForwardDiff.jacobian!(J, res2!, zeros(eltype(x), n), x)
-        sol = lm_trust_region!(res2!, jac2!, [x0[1], x0[2]], n; lb = lb[1:2], ub = ub[1:2])
+        sol = lm_trust_region!(res2!, jac2!, [x0[1], x0[2]], n, QRStrategy(); lb = lb[1:2], ub = ub[1:2])
         return [sol[1][1], sol[1][2], tₘ, θ, k], sol
     end
 end
@@ -283,6 +283,8 @@ function interpolate_forecast(
 
     windows = sunrise_windows(fc_times, ϕ, λ)
     t_start = typemin(DateTime)        # the first window also owns what precedes it
+    x_guess = zeros(eltype(fc_values), 5) # initializing the guess value.
+    
     for (i, w) in enumerate(windows)
         # a window owns the output times of its own sunrise-to-sunrise span, and
         # the last one everything after it, so the tiling leaves no output time
@@ -301,7 +303,18 @@ function interpolate_forecast(
             continue
         end
 
-        x, _ = fit_dtc_window(t_fc, T_fc, w.ω; fixed_shape = fixed_shape)
+        # best random guess:
+        x0 = dtc_initial(t_fc, T_fc, w.ω)
+
+        # best guess updated if we have a previous window fit.
+        if (i > 1) & (sum(x_guess) > 1e-20)
+            x0 = x_guess
+        end
+
+        x, _ = fit_dtc_window(t_fc, T_fc, w.ω;x0, fixed_shape = fixed_shape)
+
+        # update x0: the last window fit is a good guest for the current window
+        x_guess = copy(x)
 
         fitted_out = dtc.(t_out, x[1], x[2], x[3], x[4], x[5], w.ω)
         fitted_fc = dtc.(t_fc, x[1], x[2], x[3], x[4], x[5], w.ω)
