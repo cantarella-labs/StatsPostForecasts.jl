@@ -14,4 +14,4 @@ StatsPostForecasts = {path = ".."}
 [compat]
 CairoMakie = "0.15.14"
 DataFrames = "1.8.2"
-DataFramesMeta = "0.9.1"
+DataFramesMeta = "0.9.1, 0.15"
