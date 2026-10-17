@@ -53,7 +53,7 @@ jobs:
           TEST_LEVEL: ${{ inputs.test_level }}
       - uses: julia-actions/julia-processcoverage@v1
         if: ${{ inputs.run_codecov }}
-      - uses: codecov/codecov-action@v4
+      - uses: codecov/codecov-action@v7
         if: ${{ inputs.run_codecov }}
         with:
           file: lcov.info
