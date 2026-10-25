@@ -2,6 +2,7 @@ module StatsPostForecasts
 
 include("data_structures.jl")
 include("MBM.jl")
+include("EMOS.jl")
 include("training.jl")
 include("parse_grib.jl")
 include("solar_interpolation.jl")
@@ -9,11 +10,13 @@ include("interpolate_on_data.jl")
 include("evaluating.jl")
 
 export Forecast,
+    MBM,
+    EMOS,
     InitForecast,
     Observations,
     observation_at,
     TrainingObject,
-    MBMParameters,
+    Parameters,
     ncases,
     nmembers,
     fitting_crps,

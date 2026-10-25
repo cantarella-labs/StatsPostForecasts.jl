@@ -178,7 +178,7 @@ corrected ensemble; the closed form is exact only for τₙ ≥ 0, i.e. for
 `E[m, i]` is a deviation, so the mean is *not* subtracted here (contrast
 `mbm_correction!`, which takes raw members).
 """
-function crps_min(p, training_object::TrainingObject)
+function crps_min(::MBM, p, training_object::TrainingObject)
     sum_J = zero(eltype(p))
     α, β, γ₁, γ₂ = p
     y = training_object.y
@@ -207,7 +207,7 @@ end
 """
 Instead of the loss function this function return the coefficients of the Linear Programming version of the problem
 """
-function crps_min_lp(p, training_object::TrainingObject)
+function crps_min_lp(::MBM, p, training_object::TrainingObject)
     sum_J = zero(eltype(p))
     α, β, γ₁, γ₂ = p
     y = training_object.y

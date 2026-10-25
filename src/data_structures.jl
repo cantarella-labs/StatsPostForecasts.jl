@@ -154,6 +154,7 @@ struct TrainingObject{P<:Period,F<:Real}
     init_times::Vector{DateTime}
     y::Vector{F}
     xmean::Vector{F}
+    s²::Vector{F}
     d::Vector{F}
     E::Matrix{F}
     function TrainingObject(
@@ -161,6 +162,7 @@ struct TrainingObject{P<:Period,F<:Real}
         init_times::Vector{DateTime},
         y::Vector{F},
         xmean::Vector{F},
+        s²::Vector{F},
         d::Vector{F},
         E::Matrix{F},
     ) where {P<:Period,F<:Real}
@@ -173,17 +175,22 @@ struct TrainingObject{P<:Period,F<:Real}
         ) || throw(ArgumentError("inconsistent number of cases N"))
         all(>(0), d) ||
             throw(ArgumentError("all spreads d must be strictly positive; apply a floor"))
-        new{P,F}(lead_time, init_times, y, xmean, d, E)
+        new{P,F}(lead_time, init_times, y, xmean, s², d, E)
     end
 end
 
+abstract type PostProcessingMethod end
+
+struct MBM <: PostProcessingMethod end
+struct EMOS <: PostProcessingMethod end
 
 """
-    MBMParameters{P, F}
+    Parameters{P, F}
 
-Fitted MBM parameters for one init time (ECMWF: 00 or 12h maybe 06 and 18h).
+Fitted parameters of a given method, for one init time (ECMWF: 00 or 12h; maybe 06 and 18h).
 
 # Fields
+- `method::O`, the PostProcessingMethod type (for now MBM or EMOS)
 - `init_time::M`
 - `lead_times::AstractVector{P}`.
 - `p::Vector{F}`: `(α, β, γ₁, γ₂)`, in the order expected by
@@ -199,7 +206,8 @@ A full parameter table for one location/variable is a `Vector{MBMParameters}`
 indexed by lead time; keep separate tables per initialisation hour
 (00 UTC and 12 UTC runs are not pooled).
 """
-struct MBMParameters{M<:Period,P<:Period,F<:Real}
+struct Parameters{M<:Period,P<:Period,F<:Real, O<:PostProcessingMethod}
+    method::O
     init_time::M
     lead_times::AbstractVector{P}
     p::Dict{P,AbstractVector{F}}

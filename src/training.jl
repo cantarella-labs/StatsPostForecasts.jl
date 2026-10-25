@@ -1,5 +1,6 @@
 using JuMP, HiGHS
 using Optim, ADTypes, ForwardDiff
+using Statistics
 
 #=
 Fitting the MBM parameters by CRPS minimisation
@@ -50,6 +51,7 @@ function TrainingObject(
     init_times = DateTime[]
     y = F[]
     xmean = F[]
+    s²ₐ = F[]
     d = F[]
     cols = Vector{Vector{F}}()
 
@@ -62,9 +64,11 @@ function TrainingObject(
 
         x = sort(run.forecasts[k].ensemble)
         m = mean(x)
+        s² = var(x; corrected = false, mean = m)
         push!(init_times, run.timestamp)
         push!(y, obs_value)
         push!(xmean, m)
+        push!(s²ₐ, s²)
         push!(d, max(mean_abs_diff(x), d_floor))
         push!(cols, x .- m)
     end
@@ -75,7 +79,7 @@ function TrainingObject(
         throw(ArgumentError("all cases must have the same number of members"))
     E = reduce(hcat, cols)::Matrix{F}
 
-    return TrainingObject(lead_time, init_times, y, xmean, d, E)
+    return TrainingObject(lead_time, init_times, y, xmean, s²ₐ, d, E)
 end
 
 
@@ -151,7 +155,7 @@ minimiser of `crps_min`, and the tₙₘ are discarded.
   change the minimiser.
 - Throws if the solver does not return an optimal, feasible solution.
 """
-function fitting_crps(training_object::TrainingObject; set_silence::Bool = true)
+function fitting_crps(::MBM, training_object::TrainingObject; set_silence::Bool = true)
     y = training_object.y
     xmean = training_object.xmean
     d = training_object.d
@@ -199,12 +203,11 @@ Same objective as `fitting_crps`, minimised with box-constrained L-BFGS
 (`Optim.Fminbox`) and forward-mode AD instead of the exact LP. Kept as a
 cross-check of the LP; `result` is the `Optim` result object.
 """
-function fitting_crps_naive(training_object::TrainingObject)
-    p0 = [1e-10, 1.0, 1.0, 1e-10]        # the raw ensemble, nudged inside the box
+function fitting_crps_naive(pm::PostProcessingMethod, training_object::TrainingObject)
+    p0 = [1e-10, 1.0, 1e-10, 1.0]        # the raw ensemble
     lower = [-Inf, -Inf, 0.0, 0.0]
     upper = fill(Inf, 4)
-    f(p) = crps_min(p, training_object)
-    # ponytail: L-BFGS on a piecewise-linear objective; CG and GD stall at kinks, this did not
+    f(p) = crps_min(pm, p, training_object)
     result =
         Optim.optimize(f, lower, upper, p0, Fminbox(LBFGS()); autodiff = AutoForwardDiff())
     return Optim.minimizer(result), result
