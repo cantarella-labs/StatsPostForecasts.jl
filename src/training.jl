@@ -27,7 +27,7 @@ Eq. (4b), d̃ₙ = γ₁·dₙ + γ₂, to be the spread of the corrected ensemb
     TrainingObject(inits, obs, lead_time; d_floor) -> TrainingObject
 
 Assemble the training slice for `lead_time` from a collection of raw
-`InitForecast`s and an `Observations` series.
+`InitForecast`s (or `QuantileInitForecast`s) and an `Observations` series.
 
 For every initialisation the forecast at `lead_time` is looked up, its
 valid time `timestamp + lead_time` is matched against `obs`, and the case
@@ -41,9 +41,16 @@ precision (e.g. 0.01 for temperature in K).
 Cases are returned in increasing initialisation time. The number of
 members `M` is taken from the first kept case and must be the same for
 all cases.
+
+From quantile runs, `xmean` and `s²` come from [`normal_stats`](@ref), `d` is
+the absolute spread of that normal, 2s/√π, and `E` is empty (`M = 0`): the
+slice trains EMOS, and MBM refuses it.
 """
 function TrainingObject(
-    inits::AbstractVector{InitForecast{P,F}},
+    inits::Union{
+        AbstractVector{InitForecast{P,F}},
+        AbstractVector{QuantileInitForecast{P,F}},
+    },
     obs::Observations{F},
     lead_time::P;
     d_floor::F = F(1e-2),
@@ -62,15 +69,13 @@ function TrainingObject(
         obs_value = observation_at(obs, run.timestamp + lead_time)
         obs_value === nothing && continue
 
-        x = sort(run.forecasts[k].ensemble)
-        m = mean(x)
-        s² = var(x; corrected = false, mean = m)
+        m, s², dₙ, col = training_case(run.forecasts[k])
         push!(init_times, run.timestamp)
         push!(y, obs_value)
         push!(xmean, m)
         push!(s²ₐ, s²)
-        push!(d, max(mean_abs_diff(x), d_floor))
-        push!(cols, x .- m)
+        push!(d, max(dₙ, d_floor))
+        push!(cols, col)
     end
 
     isempty(y) && throw(ArgumentError("no training cases found for lead time $lead_time"))
@@ -80,6 +85,19 @@ function TrainingObject(
     E = reduce(hcat, cols)::Matrix{F}
 
     return TrainingObject(lead_time, init_times, y, xmean, s²ₐ, d, E)
+end
+
+# One case of a training slice: (mean, variance, absolute spread, sorted deviations)
+function training_case(fc::Forecast)
+    x = sort(fc.ensemble)
+    m, s² = normal_stats(fc)
+    return m, s², mean_abs_diff(x), x .- m
+end
+
+# Quantiles have no members: the spread is that of the fitted normal, and no deviations
+function training_case(fc::QuantileForecast)
+    m, s² = normal_stats(fc)
+    return m, s², 2 * √(s² / π), similar(fc.quantiles, 0)
 end
 
 
@@ -156,6 +174,9 @@ minimiser of `crps_min`, and the tₙₘ are discarded.
 - Throws if the solver does not return an optimal, feasible solution.
 """
 function fitting_crps(::MBM, training_object::TrainingObject; set_silence::Bool = true)
+    nmembers(training_object) > 0 || throw(
+        ArgumentError("MBM needs ensemble members; this slice was built from quantiles"),
+    )
     y = training_object.y
     xmean = training_object.xmean
     d = training_object.d

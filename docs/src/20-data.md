@@ -4,8 +4,10 @@ CurrentModule = StatsPostForecasts
 
 # [Data model](@id data)
 
-Three containers carry everything. They are deliberately small: the package does
-not know where your data comes from, only what shape it arrives in.
+Three containers carry everything, plus a quantile variant of the forecast
+pair for products that do not publish members. They are deliberately small: the
+package does not know where your data comes from, only what shape it arrives
+in.
 
 ## The containers
 
@@ -39,6 +41,30 @@ y === nothing && return          # not a training case, not an error
 That `nothing` is deliberate. A forecast whose valid time has no observation is
 simply not a case, and both [`TrainingObject`](@ref) and the evaluation path
 skip it silently.
+
+### Quantile forecasts
+
+Some products publish quantiles of the predictive distribution instead of
+members. [`QuantileForecast`](@ref) is one lead time as probability levels and
+the values at those levels, and [`QuantileInitForecast`](@ref) is a whole run.
+It has the same fields as `InitForecast`, with `QuantileForecast`s in place of
+`Forecast`s:
+
+```julia
+QuantileForecast(Hour(12), [0.05, 0.25, 0.5, 0.75, 0.95],
+                 [288.9, 290.3, 291.1, 291.8, 293.0])
+```
+
+Levels need not be evenly spaced. The constructor is the ingestion check: it
+throws on mismatched lengths, fewer than two levels, levels outside ``(0, 1)``
+or not strictly increasing, and crossing quantiles. Bad input fails there,
+instead of later as a negative spread.
+
+Quantile runs go through EMOS end to end: [`TrainingObject`](@ref),
+[`fitting_crps_naive`](@ref), [`apply_emos_correction`](@ref) and
+[`evaluate_forecast`](@ref). See [EMOS from quantile
+forecasts](@ref quantile-emos) for how they are summarised. MBM corrects
+members, so it refuses them.
 
 ## Getting ECMWF open data
 
@@ -87,6 +113,14 @@ containers directly:
 runs = [InitForecast(t0, [Forecast(Hour(h), members(t0, h)) for h in 0:3:48], false)
         for t0 in init_times]
 obs = Observations(station_times, station_values)
+```
+
+For a quantile product, the same pattern with the quantile containers:
+
+```julia
+qruns = [QuantileInitForecast(t0, [QuantileForecast(Hour(h), levels, qs(t0, h))
+                                   for h in 0:3:48], false)
+         for t0 in init_times]
 ```
 
 Everything downstream — training, correction, interpolation, evaluation — works

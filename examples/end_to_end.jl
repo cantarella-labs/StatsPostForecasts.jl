@@ -129,14 +129,16 @@ end
 # one table per method and initialisation hour — 00 and 12 UTC are never pooled
 init_hour = Hour(parse(Int, INIT_HOUR))
 params_mbm = Parameters(MBM(), init_hour, leads, pbylead[MBM()], window, crps_train[MBM()])
-params_emos = Parameters(EMOS(), init_hour, leads, pbylead[EMOS()], window, crps_train[EMOS()])
+params_emos =
+    Parameters(EMOS(), init_hour, leads, pbylead[EMOS()], window, crps_train[EMOS()])
 
 # ---- 4. every held-out run: correct it, interpolate, score it
 #         `evaluate_forecast` does all three and returns the raw and corrected
 #         CRPS at every observation time inside the run's span
 ϕ, λ = STATION
 evals_mbm = [evaluate_forecast(MBM(), runs[d], obs, params_mbm, ϕ, λ) for d in TEST_DATES]
-evals_emos = [evaluate_forecast(EMOS(), runs[d], obs, params_emos, ϕ, λ) for d in TEST_DATES]
+evals_emos =
+    [evaluate_forecast(EMOS(), runs[d], obs, params_emos, ϕ, λ) for d in TEST_DATES]
 
 points = DataFrame(
     init = DateTime[],

@@ -115,6 +115,14 @@ follows the diurnal cycle; ``σ^2`` is interpolated linearly. `crps_raw` is stil
 the ensemble CRPS of the raw members, so the two methods can be compared on the
 same baseline.
 
+A `QuantileInitForecast` goes through the same call. `raw` then has one column
+per quantile level, and `crps_raw` is the normal CRPS of the raw quantiles'
+fitted normal ([`normal_stats`](@ref)). That is the EMOS identity `[0, 1, 0, 1]`,
+the same baseline as in training. Quantiles have no members, so an ensemble
+CRPS is not available. An average pinball loss over the levels would leave out
+the tails beyond the outermost levels, so it would not be comparable with the
+normal CRPS of the corrected forecast.
+
 Only observations inside the run's own span are used. Outside it the
 interpolation extrapolates, which is not evaluation — and an empty overlap
 throws rather than returning nothing useful.

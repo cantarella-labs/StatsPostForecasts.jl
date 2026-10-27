@@ -154,20 +154,23 @@ end
     apply_emos_correction(run, params) -> (; timestamp, lead_times, μ, σ²)
 
 Predictive distribution N(μ, σ²) at every lead time of one raw run, from
-[`emos_correction`](@ref) applied to that lead's ensemble mean and
-(uncorrected) variance. `μ` and `σ²` are vectors aligned with `lead_times`.
+[`emos_correction`](@ref) applied to that lead's [`normal_stats`](@ref):
+the ensemble mean and (uncorrected) variance for an `InitForecast`, the
+fitted normal for a `QuantileInitForecast`. `μ` and `σ²` are vectors aligned
+with `lead_times`.
 
 Throws if the run is already corrected, or if `params` has no entry for one of
 the run's lead times.
 """
-function apply_emos_correction(run::InitForecast, params::Parameters{<:Any,<:Any,<:Any,EMOS})
+function apply_emos_correction(
+    run::Union{InitForecast,QuantileInitForecast},
+    params::Parameters{<:Any,<:Any,<:Any,EMOS},
+)
     run.corrected && throw(ArgumentError("run at $(run.timestamp) is already corrected"))
     stats = map(run.forecasts) do fc
         haskey(params.p, fc.lead_time) ||
             throw(KeyError("no EMOS parameters for lead time $(fc.lead_time)"))
-        x = fc.ensemble
-        x_mean = mean(x)
-        emos_correction(params.p[fc.lead_time], x_mean, var(x; corrected = false, mean = x_mean))
+        emos_correction(params.p[fc.lead_time], normal_stats(fc)...)
     end
     return (
         timestamp = run.timestamp,
@@ -186,13 +189,19 @@ interpolated with `interpolate_forecast` (it follows the diurnal cycle); its
 variance σ² is interpolated linearly in time.
 
 Returns `(; times, observed, raw, corrected, crps_raw, crps_corrected)`, where
-`raw` is `length(times) × M` and `corrected` is `length(times) × 2` with
-columns `[μ σ²]`. `crps_raw` is the ensemble CRPS, `crps_corrected` the
-normal CRPS.
+`corrected` is `length(times) × 2` with columns `[μ σ²]` and `crps_corrected`
+is its normal CRPS.
+
+- For an `InitForecast`, `raw` is `length(times) × M`, one column per member,
+  and `crps_raw` is the ensemble CRPS of the members.
+- For a `QuantileInitForecast`, `raw` is `length(times) × K`, one column per
+  quantile level, and `crps_raw` is the normal CRPS of the raw quantiles'
+  [`normal_stats`](@ref), interpolated like the correction: the score of the
+  EMOS identity `[0, 1, 0, 1]`, the same baseline as in training.
 """
 function evaluate_forecast(
     ::EMOS,
-    run::InitForecast,
+    run::Union{InitForecast,QuantileInitForecast},
     obs::Observations,
     params::Parameters,
     ϕ,
@@ -208,27 +217,48 @@ function evaluate_forecast(
     times, y = obs.times[keep], obs.values[keep]
 
     F = float(eltype(obs.values))
-    M = length(first(run.forecasts).ensemble)
-    raw = Matrix{F}(undef, length(times), M) # one col per member
-    cor = Matrix{F}(undef, length(times), 2) # [μ σ²]
+    M = length(raw_values(first(run.forecasts)))
+    raw = Matrix{F}(undef, length(times), M) # one col per member or quantile level
     for m in 1:M
         raw[:, m] .= interpolate_forecast(
             fc_times,
-            [fc.ensemble[m] for fc in run.forecasts],
+            [raw_values(fc)[m] for fc in run.forecasts],
             times,
             ϕ,
             λ,
         )
     end
-    cor[:, 1] .= interpolate_forecast(fc_times, correction.μ, times, ϕ, λ)
-    cor[:, 2] .= LinearInterpolation(correction.σ², Dates.value.(fc_times)).(Dates.value.(times))
+    cor = interpolate_normal(fc_times, correction.μ, correction.σ², times, ϕ, λ)
 
     return (
         times = times,
         observed = y,
         raw = raw,
         corrected = cor,
-        crps_raw = [crps(MBM(), view(raw, i, :), y[i]) for i in eachindex(times)],
-        crps_corrected = [crps(EMOS(), cor[i, 1], cor[i, 2], y[i]) for i in eachindex(times)],
+        crps_raw = raw_crps(run, raw, y, fc_times, times, ϕ, λ),
+        crps_corrected = [
+            crps(EMOS(), cor[i, 1], cor[i, 2], y[i]) for i in eachindex(times)
+        ],
     )
+end
+
+raw_values(fc::Forecast) = fc.ensemble
+raw_values(fc::QuantileForecast) = fc.quantiles
+
+# Normal forecasts on the observation times as a `length(times) × 2` matrix
+# [μ σ²]: μ through the diurnal cycle, σ² linearly in time.
+function interpolate_normal(fc_times, μ, σ², times, ϕ, λ)
+    return hcat(
+        interpolate_forecast(fc_times, μ, times, ϕ, λ),
+        LinearInterpolation(σ², Dates.value.(fc_times)).(Dates.value.(times)),
+    )
+end
+
+raw_crps(::InitForecast, raw, y, _...) =
+    [crps(MBM(), view(raw, i, :), y[i]) for i in eachindex(y)]
+
+function raw_crps(run::QuantileInitForecast, raw, y, fc_times, times, ϕ, λ)
+    stats = normal_stats.(run.forecasts)
+    nrm = interpolate_normal(fc_times, first.(stats), last.(stats), times, ϕ, λ)
+    return [crps(EMOS(), nrm[i, 1], nrm[i, 2], y[i]) for i in eachindex(y)]
 end

@@ -44,7 +44,11 @@
     end
 end
 
-@testitem "CRPS - MBM fit on six July 2026 ENS runs" setup = [Data] tags=[:integration, :network, :slow] begin
+@testitem "CRPS - MBM fit on six July 2026 ENS runs" setup = [Data] tags=[
+    :integration,
+    :network,
+    :slow,
+] begin
     using Dates, Statistics
     import StatsPostForecasts as SPF
 
@@ -83,7 +87,11 @@ end
 end
 
 
-@testitem "CRPS - EMOS fit on six July 2026 ENS runs" setup = [Data] tags=[:integration, :network, :slow] begin
+@testitem "CRPS - EMOS fit on six July 2026 ENS runs" setup = [Data] tags=[
+    :integration,
+    :network,
+    :slow,
+] begin
     using Dates, Statistics
     import StatsPostForecasts as SPF
 
@@ -117,5 +125,98 @@ end
         p0 = [ab; var(t.y - X * ab; corrected = false); 1e-10]
         p_ols, _ = SPF.fitting_crps_naive(SPF.EMOS(), t; p0 = p0)
         @test SPF.crps_min(SPF.EMOS(), p_ols, t) ≈ J rtol = 1e-3
+    end
+end
+
+
+@testitem "Quantile forecasts: normal_stats and ingestion guards" tags=[:unit] begin
+    using Dates
+    import StatsPostForecasts as SPF
+
+    # quantiles of an exact normal give back its location and scale, at uneven levels
+    τ = [0.01, 0.05, 0.1, 0.25, 0.5, 0.75, 0.9, 0.95, 0.99]
+    q = 290.0 .+ 1.5 .* SPF.quantile.(SPF.std_normal, τ)
+    m, s² = SPF.normal_stats(SPF.QuantileForecast(Hour(6), τ, q))
+    @test m ≈ 290.0
+    @test s² ≈ 2.25
+
+    # bad input fails at construction, not later as a negative spread
+    @test_throws ArgumentError SPF.QuantileForecast(Hour(6), τ, q[1:(end-1)])
+    @test_throws ArgumentError SPF.QuantileForecast(Hour(6), [0.5], [1.0])
+    @test_throws ArgumentError SPF.QuantileForecast(Hour(6), [0.0, 0.5], [1.0, 2.0])
+    @test_throws ArgumentError SPF.QuantileForecast(Hour(6), [0.5, 0.5], [1.0, 2.0])
+    @test_throws ArgumentError SPF.QuantileForecast(Hour(6), [0.25, 0.5], [2.0, 1.0])
+end
+
+
+@testitem "CRPS - EMOS fit on quantiles of six July 2026 ENS runs" setup = [Data] tags=[
+    :integration,
+    :network,
+    :slow,
+] begin
+    using Dates, Statistics
+    import StatsPostForecasts as SPF
+
+    # the same real runs as published quantiles: empirical quantiles of the members
+    # at uneven levels
+    τ = [0.05, 0.1, 0.25, 0.5, 0.75, 0.9, 0.95]
+    qruns = [
+        SPF.QuantileInitForecast(
+            r.timestamp,
+            [
+                SPF.QuantileForecast(fc.lead_time, τ, quantile(fc.ensemble, τ)) for
+                fc in r.forecasts
+            ],
+            false,
+        ) for r in runs
+    ]
+
+    identity = [0.0, 1.0, 0.0, 1.0]
+    for lt in (Hour(12), Hour(24))
+        tq = SPF.TrainingObject(qruns, obs, lt)
+        te = SPF.TrainingObject(runs, obs, lt)
+        @test SPF.ncases(tq) == 6
+        @test SPF.nmembers(tq) == 0
+        @test tq.y == te.y
+
+        # the fitted normal sits on the ensemble; its scale is somewhat smaller, since
+        # empirical quantiles of 10 members are compressed
+        @test maximum(abs.(tq.xmean .- te.xmean)) < 0.2
+        @test all(r -> 0.75 < r < 1.05, sqrt.(tq.s²) ./ sqrt.(te.s²))
+
+        # EMOS fits the quantile slice, beats its identity, and lands near the fit on
+        # the members: the same data, summarised differently
+        p, res = SPF.fitting_crps_naive(SPF.EMOS(), tq)
+        J = SPF.crps_min(SPF.EMOS(), p, tq)
+        @test SPF.Optim.converged(res)
+        @test J < SPF.crps_min(SPF.EMOS(), identity, tq)
+        @test p[3] >= 0 && p[4] >= 0
+        pe, _ = SPF.fitting_crps_naive(SPF.EMOS(), te)
+        @test J ≈ SPF.crps_min(SPF.EMOS(), pe, te) rtol = 0.1
+
+        # prediction matches training: applying the fit to each quantile run and
+        # scoring it reproduces the objective
+        params = SPF.Parameters(
+            SPF.EMOS(),
+            Hour(0),
+            [lt],
+            Dict{Hour,AbstractVector{Float64}}(lt => p),
+            extrema(tq.init_times),
+            [J],
+        )
+        direct = mean(qruns) do r
+            one = SPF.QuantileInitForecast(
+                r.timestamp,
+                filter(f -> f.lead_time == lt, r.forecasts),
+                false,
+            )
+            c = SPF.apply_emos_correction(one, params)
+            SPF.crps(SPF.EMOS(), c.μ[1], c.σ²[1], SPF.observation_at(obs, r.timestamp + lt))
+        end
+        @test direct ≈ J
+
+        # MBM needs members
+        @test_throws ArgumentError SPF.crps_min(SPF.MBM(), [0.0, 1.0, 1.0, 0.0], tq)
+        @test_throws ArgumentError SPF.fitting_crps(SPF.MBM(), tq)
     end
 end

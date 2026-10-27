@@ -88,6 +88,63 @@ end
 
 
 """
+    QuantileForecast{P, F}
+
+One forecast at one lead time given as quantiles of the predictive
+distribution, as published by products that do not ship ensemble members.
+
+# Fields
+- `lead_time::P`: time since initialisation, e.g. `Hour(3)`.
+- `levels::Vector{F}`: probability levels τₖ, strictly increasing and
+  strictly inside (0, 1); they need not be evenly spaced.
+- `quantiles::Vector{F}`: the values qₖ at those levels, non-decreasing.
+
+The constructor throws on inconsistent input (lengths, levels outside
+(0, 1), unsorted levels, crossing quantiles) instead of letting a bad
+ingestion surface later as a negative spread.
+"""
+struct QuantileForecast{P<:Period,F<:Real}
+    lead_time::P
+    levels::Vector{F}
+    quantiles::Vector{F}
+    function QuantileForecast(
+        lead_time::P,
+        levels::Vector{F},
+        quantiles::Vector{F},
+    ) where {P<:Period,F<:Real}
+        length(levels) == length(quantiles) ||
+            throw(ArgumentError("levels and quantiles must have the same length"))
+        length(levels) >= 2 || throw(ArgumentError("need at least two quantile levels"))
+        all(τ -> 0 < τ < 1, levels) ||
+            throw(ArgumentError("levels must lie strictly inside (0, 1)"))
+        issorted(levels; lt = <=) ||
+            throw(ArgumentError("levels must be strictly increasing"))
+        issorted(quantiles) ||
+            throw(ArgumentError("quantiles must be non-decreasing (crossing quantiles)"))
+        new{P,F}(lead_time, levels, quantiles)
+    end
+end
+
+
+"""
+    QuantileInitForecast{P, F}
+
+All lead times of one model run for one variable at one location, as
+quantile forecasts. The quantile counterpart of [`InitForecast`](@ref),
+with the same fields and conventions; `forecasts` holds
+[`QuantileForecast`](@ref)s.
+
+Quantile runs can train and apply EMOS (via [`normal_stats`](@ref)); MBM
+needs ensemble members and refuses them.
+"""
+struct QuantileInitForecast{P<:Period,F<:Real}
+    timestamp::DateTime
+    forecasts::Vector{QuantileForecast{P,F}}
+    corrected::Bool
+end
+
+
+"""
     Observations{F}
 
 Observed time series of one variable at one location, used both to train
@@ -211,7 +268,7 @@ Fitted parameters of one post-processing method for one initialisation hour
 Keep one `Parameters` per initialisation hour (00 UTC and 12 UTC runs are
 not pooled).
 """
-struct Parameters{M<:Period,P<:Period,F<:Real, O<:PostProcessingMethod}
+struct Parameters{M<:Period,P<:Period,F<:Real,O<:PostProcessingMethod}
     method::O
     init_time::M
     lead_times::AbstractVector{P}

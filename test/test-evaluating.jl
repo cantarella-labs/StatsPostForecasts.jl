@@ -143,7 +143,7 @@ end
 
 @testitem "evaluate_forecast on an ENS slice" tags=[:integration, :network] begin
     using Dates
-    using Statistics: mean, var
+    using Statistics: mean, var, quantile
     import StatsPostForecasts as SPF
 
     # a real run, 3 members, 3-hourly over one day — enough points in the
@@ -230,4 +230,32 @@ end
           SPF.crps(SPF.EMOS(), ee.corrected[k, 1], ee.corrected[k, 2], ee.observed[k])
     @test all(≥(0), ee.crps_corrected)
     @test_throws ArgumentError SPF.evaluate_forecast(SPF.EMOS(), run, far, emos_id, ϕ, λ)
+
+    # ---- EMOS on the same run published as quantiles (empirical, uneven levels)
+    τ = [0.1, 0.25, 0.5, 0.75, 0.9]
+    qrun = SPF.QuantileInitForecast(
+        run.timestamp,
+        [
+            SPF.QuantileForecast(fc.lead_time, τ, quantile(fc.ensemble, τ)) for
+            fc in run.forecasts
+        ],
+        false,
+    )
+    eq = SPF.evaluate_forecast(SPF.EMOS(), qrun, obs, emos_id, ϕ, λ)
+
+    @test eq.times == ev.times
+    @test size(eq.raw) == (length(eq.times), length(τ))
+    @test size(eq.corrected) == (length(eq.times), 2)
+    @test all(>(0), eq.corrected[:, 2])
+
+    # exact at the forecast times: raw columns are the quantiles, the correction
+    # is N(m, s²) from the fitted normal
+    q12 = qrun.forecasts[findfirst(f -> f.lead_time == Hour(12), qrun.forecasts)]
+    @test eq.raw[k, :] ≈ q12.quantiles
+    @test collect(eq.corrected[k, :]) ≈ collect(SPF.normal_stats(q12))
+
+    # the baseline is the raw fitted normal, so the identity scores the same
+    @test eq.crps_corrected ≈ eq.crps_raw
+    @test all(≥(0), eq.crps_raw)
+    @test_throws ArgumentError SPF.evaluate_forecast(SPF.EMOS(), qrun, far, emos_id, ϕ, λ)
 end

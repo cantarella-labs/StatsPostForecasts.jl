@@ -160,6 +160,35 @@ to the raw ensemble, not of the ensemble itself, so it differs from
 `crps_min(MBM(), [0, 1, 1, 0], t)`. When comparing the two methods, compare
 out of sample (see [Evaluation](@ref evaluation)).
 
+## [EMOS from quantile forecasts](@id quantile-emos)
+
+Some products publish quantiles of the predictive distribution instead of
+ensemble members. [`QuantileForecast`](@ref) holds one lead time as levels
+``τ_k`` and values ``q_k``, and [`QuantileInitForecast`](@ref) holds a whole run.
+Both mirror their ensemble counterparts, and the constructor rejects bad input:
+levels outside ``(0, 1)`` or unsorted, and crossing quantiles.
+
+EMOS only needs a location and a scale, and [`normal_stats`](@ref) gets them
+from the quantiles by fitting a normal in least squares:
+
+```math
+q_k = m + s\,z_k, \qquad z_k = Φ^{-1}(τ_k)
+```
+
+This uses every level and does not need them evenly spaced. After that,
+everything is the same as for an ensemble:
+
+```julia
+t = TrainingObject(quantile_runs, obs, Hour(12))   # xmean = m, s² = s²
+p, _ = fitting_crps_naive(EMOS(), t)
+apply_emos_correction(quantile_run, params)        # N(μ, σ²) per lead time
+```
+
+``m`` and ``s`` match an ensemble's mean and standard deviation only for normal
+quantiles. That is fine, because ``β`` and ``γ_2`` absorb the difference as long
+as training and prediction use the same summary, which they do. A slice built
+from quantiles has no members (`nmembers(t) == 0`), so MBM throws on it.
+
 ## One table per initialisation hour and lead time
 
 [`Parameters`](@ref) holds a whole table for one method and initialisation

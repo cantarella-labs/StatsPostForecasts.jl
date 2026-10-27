@@ -5,6 +5,33 @@ using Distributions
 const std_normal = Normal(0, 1)
 
 """
+    normal_stats(fc::Forecast) -> (m, s²)
+    normal_stats(fc::QuantileForecast) -> (m, s²)
+
+The location and squared scale EMOS regresses on.
+
+For an ensemble, its mean and uncorrected variance (divided by `M`).
+
+For quantiles, the normal that fits them best in least squares: with
+zₖ = Φ⁻¹(τₖ), regress qₖ = m + s·zₖ, so s is the slope and m the intercept.
+This uses every level, does not need them evenly spaced, and leaves the
+tails no more weight than the centre. For a non-normal distribution m and s
+are not its mean and standard deviation, but EMOS only needs them to be
+computed the same way in training and at prediction time.
+"""
+function normal_stats(fc::Forecast)
+    m = mean(fc.ensemble)
+    return m, var(fc.ensemble; corrected = false, mean = m)
+end
+
+function normal_stats(fc::QuantileForecast)
+    z = quantile.(std_normal, fc.levels)
+    z̄, q̄ = mean(z), mean(fc.quantiles)
+    s = sum((z .- z̄) .* (fc.quantiles .- q̄)) / sum(abs2, z .- z̄)
+    return q̄ - s * z̄, s^2
+end
+
+"""
     emos_correction(p, x_mean, s²) -> (μ, σ²)
 
 Predictive normal distribution N(μ, σ²) of one raw ensemble with mean

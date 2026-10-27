@@ -70,11 +70,15 @@ for lt in (Hour(12), Hour(24))
     p_mbm, _ = fitting_crps(MBM(), t)
     p_emos, _ = fitting_crps_naive(EMOS(), t)
     println("lead $lt: N = $(ncases(t)) cases, M = $(nmembers(t)) members")
-    println("  raw ensemble  CRPS = $(round(crps_min(MBM(), [0, 1, 1, 0], t); digits = 3)) K")
+    println(
+        "  raw ensemble  CRPS = $(round(crps_min(MBM(), [0, 1, 1, 0], t); digits = 3)) K",
+    )
     println(
         "  MBM fit       CRPS = $(round(crps_min(MBM(), p_mbm, t); digits = 3)) K   (α, β, γ₁, γ₂) = $(round.(p_mbm; digits = 3))",
     )
-    println("  raw N(x̄, s²)  CRPS = $(round(crps_min(EMOS(), [0, 1, 0, 1], t); digits = 3)) K")
+    println(
+        "  raw N(x̄, s²)  CRPS = $(round(crps_min(EMOS(), [0, 1, 0, 1], t); digits = 3)) K",
+    )
     println(
         "  EMOS fit      CRPS = $(round(crps_min(EMOS(), p_emos, t); digits = 3)) K   (α, β, γ₁, γ₂) = $(round.(p_emos; digits = 3))",
     )

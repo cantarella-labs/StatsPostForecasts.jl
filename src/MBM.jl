@@ -179,6 +179,9 @@ corrected ensemble; the closed form is exact only for τₙ ≥ 0, i.e. for
 `mbm_correction!`, which takes raw members).
 """
 function crps_min(::MBM, p, training_object::TrainingObject)
+    nmembers(training_object) > 0 || throw(
+        ArgumentError("MBM needs ensemble members; this slice was built from quantiles"),
+    )
     sum_J = zero(eltype(p))
     α, β, γ₁, γ₂ = p
     y = training_object.y

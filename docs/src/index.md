@@ -29,7 +29,8 @@ It also implements EMOS, the non-homogeneous Gaussian regression of
 [gneiting_calibrated_2005](@cite): the forecast is a normal distribution whose
 mean is affine in the ensemble mean and whose variance is affine in the
 ensemble variance, fitted by minimising the closed-form normal CRPS. The
-method is chosen by passing `MBM()` or `EMOS()` as the first argument.
+method is chosen by passing `MBM()` or `EMOS()` as the first argument. EMOS
+also accepts forecasts published as quantiles rather than members.
 
 Sub-daily interpolation uses the diurnal temperature cycle of
 [gottsche_modelling_2001](@cite), fitted per sunrise-to-sunrise window, with the
