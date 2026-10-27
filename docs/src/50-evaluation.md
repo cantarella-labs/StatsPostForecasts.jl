@@ -12,17 +12,15 @@ help, and it is the only number worth quoting.
 
 ## Applying the parameters
 
-[`correct`](@ref) applies a fitted table to every lead time of one run:
+[`correct`](@ref) applies a fitted MBM table to every lead time of one run:
 
 ```julia
-cor = correct(run, params)       # params::MBMParameters for this init hour
+cor = correct(run, params)       # params::Parameters{…,MBM} for this init hour
 ```
 
-Members are sorted ascending first, so member `k` of the result is the k-th
-coldest at that lead time. That is the ordering [`mean_abs_diff`](@ref) needs,
-and it is what makes an ensemble envelope meaningful across lead times — the
-band between member 1 and member `M` is then a genuine quantile envelope rather
-than a tangle of member trajectories.
+Members keep the model's order: the map is elementwise, and only the spread
+[`mean_abs_diff`](@ref) is computed on a sorted copy. Sort the result yourself
+if you want an ensemble envelope, where member 1 is always the coldest.
 
 The input run comes back untouched, so a raw run stays raw and correcting twice
 gives the same answer. The result carries `corrected = true`, and correcting it
@@ -35,10 +33,22 @@ For several runs at mixed initialisation hours, pass a `Dict` keyed by hour:
 cor = correct(runs, Dict(Hour(0) => params_00, Hour(12) => params_12))
 ```
 
+EMOS does not return an ensemble. [`apply_emos_correction`](@ref) gives the
+predictive ``N(μ, σ^2)`` at every lead time of one run:
+
+```julia
+c = apply_emos_correction(run, params)   # params::Parameters{…,EMOS}
+c.lead_times, c.μ, c.σ²
+```
+
+Passing EMOS parameters to `correct`, or MBM parameters to
+`apply_emos_correction`, is a `MethodError`.
+
 ## The score
 
-[`crps`](@ref) is the ensemble continuous ranked probability score of one
-forecast against one observation, in the units of the variable, lower better:
+[`crps`](@ref) is the continuous ranked probability score of one forecast
+against one observation, in the units of the variable, lower better. For an
+ensemble (`MBM()`) it is
 
 ```math
 \mathrm{CRPS} = \frac{1}{M}\sum_m\bigl|x^{(m)} - y\bigr|
@@ -50,11 +60,23 @@ numerically — it is the same expression [`crps_min`](@ref) minimises, evaluate
 for a single case.
 
 ```jldoctest
-julia> crps([1.0, 2.0, 3.0], 2.0)
+julia> crps(MBM(), [1.0, 2.0, 3.0], 2.0)
 0.2222222222222222
 
-julia> crps([2.0, 2.0, 2.0], 3.5)      # a deterministic forecast scores |x − y|
+julia> crps(MBM(), [2.0, 2.0, 2.0], 3.5)      # a deterministic forecast scores |x − y|
 1.5
+```
+
+For a normal forecast (`EMOS()`) it is the closed form of
+[gneiting_calibrated_2005](@cite), with ``z = (y - μ)/σ``:
+
+```math
+\mathrm{CRPS} = σ\Bigl[z\bigl(2Φ(z) - 1\bigr) + 2φ(z) - \tfrac{1}{\sqrt{π}}\Bigr]
+```
+
+```jldoctest
+julia> crps(EMOS(), 0.0, 1.0, 0.0) ≈ (√2 - 1) / √π
+true
 ```
 
 It rewards sharpness and accuracy together: the first term punishes being wrong,
@@ -69,7 +91,7 @@ silently drops everything whenever the observation falls outside the ensemble.
 [`evaluate_forecast`](@ref) does correction, interpolation and scoring together:
 
 ```julia
-ev = evaluate_forecast(run, obs, params, ϕ, λ)
+ev = evaluate_forecast(MBM(), run, obs, params, ϕ, λ)
 
 mean(ev.crps_raw)              # what the raw ensemble scored
 mean(ev.crps_corrected)        # what the corrected one scored
@@ -83,8 +105,15 @@ times. The result is a named tuple:
 |---|---|
 | `times` | observation times inside the run's span |
 | `observed` | the observed values there |
-| `raw`, `corrected` | `length(times) × M` matrices, members sorted ascending |
+| `raw`, `corrected` | `length(times) × M` matrices, one column per member |
 | `crps_raw`, `crps_corrected` | the score at each time |
+
+With `EMOS()` the call and fields are the same, except that `corrected` is a
+`length(times) × 2` matrix with columns `[μ σ²]`, and `crps_corrected` is the
+normal CRPS. ``μ`` is interpolated with [`interpolate_forecast`](@ref), since it
+follows the diurnal cycle; ``σ^2`` is interpolated linearly. `crps_raw` is still
+the ensemble CRPS of the raw members, so the two methods can be compared on the
+same baseline.
 
 Only observations inside the run's own span are used. Outside it the
 interpolation extrapolates, which is not evaluation — and an empty overlap
@@ -121,7 +150,7 @@ calibration is doing.
 ## Reading the two metrics
 
 RMSE of the ensemble **mean** and CRPS of the **ensemble** answer different
-questions, and the MBM moves them differently. The correction adjusts level and
+questions, and the corrections move them differently. The correction adjusts level and
 spread, so it improves the mean's RMSE *and* the ensemble's calibration; a
 correction that only shifted the mean would improve RMSE and could leave CRPS
 untouched or worse. Quote both.

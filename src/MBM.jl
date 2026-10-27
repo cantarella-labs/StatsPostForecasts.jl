@@ -133,7 +133,7 @@ end
 
 
 """
-    crps_min(p, training_object) -> J
+    crps_min(::MBM, p, training_object) -> J
 
 Mean CRPS of the MBM-corrected ensemble over all training cases, as a
 function of the parameter vector `p = (α, β, γ₁, γ₂)`. This is the
@@ -170,7 +170,7 @@ corrected ensemble; the closed form is exact only for τₙ ≥ 0, i.e. for
 
   with ∂x̃/∂(α, β, γ₁, γ₂) = (1, x̄ₙ, E[m,n], E[m,n]/dₙ) and
   ∂d̃ₙ/∂(γ₁, γ₂) = (dₙ, 1).
-- `crps_min([0, 1, 1, 0], t)` equals the mean CRPS of the raw ensemble.
+- `crps_min(MBM(), [0, 1, 1, 0], t)` equals the mean CRPS of the raw ensemble.
 - The function allocates nothing; all parameter-independent quantities
   live in `training_object`.
 

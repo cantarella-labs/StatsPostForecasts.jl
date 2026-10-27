@@ -1,7 +1,6 @@
-@testitem "CRPS fit on six July 2026 ENS runs" tags=[:integration, :network, :slow] begin
+@testsnippet Data begin
     using Dates, Statistics
     import StatsPostForecasts as SPF
-
     # SIAR half-hourly CSV (Fecha,Hora,Temp_Media_C,…), times in UTC (checked: the
     # 12 UTC ensemble mean matches the 12:00 row within 0.1 K). Midnight is written
     # "24:00" with the date of the day it starts; Dates rolls that into the next
@@ -43,6 +42,12 @@
         )
         SPF.read_init_forecasts(path, "t2m", [station])[1]
     end
+end
+
+@testitem "CRPS - MBM fit on six July 2026 ENS runs" setup = [Data] tags=[:integration, :network, :slow] begin
+    using Dates, Statistics
+    import StatsPostForecasts as SPF
+
 
     raw = [0.0, 1.0, 1.0, 0.0]
     for lt in (Hour(12), Hour(24))
@@ -57,22 +62,60 @@
             y = SPF.observation_at(obs, r.timestamp + lt)
             mean(abs.(x .- y)) - sum(abs(a - b) for a in x, b in x) / (2 * length(x)^2)
         end
-        @test SPF.crps_min(raw, t) ≈ direct
+        @test SPF.crps_min(SPF.MBM(), raw, t) ≈ direct
         x = sort(runs[1].forecasts[1].ensemble)
         xc = similar(x)
         SPF.mbm_correction!(xc, x, raw, mean(x), SPF.mean_abs_diff(x))
         @test xc ≈ x
 
         # LP fit: beats the raw ensemble, objective consistent, spread parameters ≥ 0
-        p, model = SPF.fitting_crps(t)
-        J = SPF.crps_min(p, t)
-        @test J < SPF.crps_min(raw, t)
+        p, model = SPF.fitting_crps(SPF.MBM(), t)
+        J = SPF.crps_min(SPF.MBM(), p, t)
+        @test J < SPF.crps_min(SPF.MBM(), raw, t)
         @test J ≈ SPF.objective_value(model) atol = 1e-6
         @test p[3] >= 0 && p[4] >= 0
 
         # naive fit (box-constrained L-BFGS on the same objective) reaches the LP optimum
-        pn, _ = SPF.fitting_crps_naive(t)
-        @test SPF.crps_min(pn, t) ≈ J rtol = 1e-4
+        pn, _ = SPF.fitting_crps_naive(SPF.MBM(), t)
+        @test SPF.crps_min(SPF.MBM(), pn, t) ≈ J rtol = 1e-4
         @test pn[3] >= 0 && pn[4] >= 0
+    end
+end
+
+
+@testitem "CRPS - EMOS fit on six July 2026 ENS runs" setup = [Data] tags=[:integration, :network, :slow] begin
+    using Dates, Statistics
+    import StatsPostForecasts as SPF
+
+    identity = [0.0, 1.0, 0.0, 1.0]
+    for lt in (Hour(12), Hour(24))
+        t = SPF.TrainingObject(runs, obs, lt)
+        @test SPF.ncases(t) == 6
+        @test SPF.nmembers(t) == 10
+
+        # identity parameters give N(x̄, s²); the objective is the mean normal CRPS of
+        # those, computed here from the raw runs (not the ensemble CRPS of the members)
+        direct = mean(runs) do r
+            x = r.forecasts[findfirst(f -> f.lead_time == lt, r.forecasts)].ensemble
+            y = SPF.observation_at(obs, r.timestamp + lt)
+            SPF.crps(SPF.EMOS(), mean(x), var(x; corrected = false), y)
+        end
+        J_id = SPF.crps_min(SPF.EMOS(), identity, t)
+        @test J_id ≈ direct
+
+        # fit from the raw ensemble: converges, beats it, variance parameters ≥ 0
+        p, res = SPF.fitting_crps_naive(SPF.EMOS(), t)
+        J = SPF.crps_min(SPF.EMOS(), p, t)
+        @test SPF.Optim.converged(res)
+        @test J < J_id
+        @test p[3] >= 0 && p[4] >= 0
+
+        # the objective is not convex: an OLS start (α, β from y ~ x̄, γ₁ the residual
+        # variance) must reach the same optimum
+        X = [ones(SPF.ncases(t)) t.xmean]
+        ab = X \ t.y
+        p0 = [ab; var(t.y - X * ab; corrected = false); 1e-10]
+        p_ols, _ = SPF.fitting_crps_naive(SPF.EMOS(), t; p0 = p0)
+        @test SPF.crps_min(SPF.EMOS(), p_ols, t) ≈ J rtol = 1e-3
     end
 end

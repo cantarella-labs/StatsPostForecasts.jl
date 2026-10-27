@@ -62,13 +62,20 @@ runs = map(DATES) do date
 end
 @info "runs loaded" [r.timestamp for r in runs]
 
-# ---- 3. fit per lead time, compare in-sample CRPS with the raw ensemble
+# ---- 3. fit both methods per lead time, compare in-sample CRPS with the raw ensemble.
+# MBM corrects every member (exact LP); EMOS replaces the ensemble by N(μ, σ²)
+# (L-BFGS). Their identities differ: the raw ensemble for MBM, N(x̄, s²) for EMOS.
 for lt in (Hour(12), Hour(24))
     t = TrainingObject(runs, obs, lt)
-    p, _ = fitting_crps(t)
+    p_mbm, _ = fitting_crps(MBM(), t)
+    p_emos, _ = fitting_crps_naive(EMOS(), t)
     println("lead $lt: N = $(ncases(t)) cases, M = $(nmembers(t)) members")
-    println("  raw    CRPS = $(round(crps_min([0, 1, 1, 0], t); digits = 3)) K")
+    println("  raw ensemble  CRPS = $(round(crps_min(MBM(), [0, 1, 1, 0], t); digits = 3)) K")
     println(
-        "  fitted CRPS = $(round(crps_min(p, t); digits = 3)) K   (α, β, γ₁, γ₂) = $(round.(p; digits = 3))",
+        "  MBM fit       CRPS = $(round(crps_min(MBM(), p_mbm, t); digits = 3)) K   (α, β, γ₁, γ₂) = $(round.(p_mbm; digits = 3))",
+    )
+    println("  raw N(x̄, s²)  CRPS = $(round(crps_min(EMOS(), [0, 1, 0, 1], t); digits = 3)) K")
+    println(
+        "  EMOS fit      CRPS = $(round(crps_min(EMOS(), p_emos, t); digits = 3)) K   (α, β, γ₁, γ₂) = $(round.(p_emos; digits = 3))",
     )
 end

@@ -7,7 +7,19 @@ end
 
 # [Calibration](@id calibration)
 
-## The model
+Two methods are implemented, selected by the first argument of
+[`crps_min`](@ref), [`fitting_crps_naive`](@ref), [`crps`](@ref) and
+[`evaluate_forecast`](@ref):
+
+- **`MBM()`**, member-by-member: every member is corrected, so the result is
+  still an ensemble.
+- **`EMOS()`**, ensemble model output statistics: the result is a normal
+  distribution built from the ensemble mean and variance.
+
+Both have four parameters ``(α, β, γ_1, γ_2)`` per lead time, and both are fitted
+by minimising the CRPS over a training slice.
+
+## The MBM model
 
 The member-by-member correction of [van_schaeybroeck_ensemble_2015](@cite) maps
 every raw member to a corrected one with an affine transformation of the ensemble
@@ -67,7 +79,7 @@ raised, so that ``γ_2/d`` stays finite.
 If no case survives, it throws rather than returning an empty object — an empty
 training set is a data problem, not a valid fit.
 
-## Fitting
+## Fitting MBM
 
 [`fitting_crps`](@ref) minimises the mean ensemble CRPS over the training slice:
 
@@ -82,39 +94,86 @@ not iterated to a tolerance. Each ``|r_{nm}|`` becomes an auxiliary variable wit
 two linear constraints.
 
 ```julia
-p, model = fitting_crps(t)      # p = [α, β, γ₁, γ₂]
+p, model = fitting_crps(MBM(), t)      # p = [α, β, γ₁, γ₂]
 ```
 
-[`fitting_crps_naive`](@ref) solves the same problem with L-BFGS instead. It
-exists to check the LP, and is slower and only locally optimal; prefer
-`fitting_crps`.
+[`fitting_crps_naive`](@ref)`(MBM(), t)` solves the same problem with L-BFGS
+instead. It exists to check the LP, and is slower and only locally optimal;
+prefer `fitting_crps`.
 
 [`crps_min`](@ref) evaluates the objective at any parameter vector, which makes
 it the natural diagnostic as well as the thing being minimised. The raw ensemble
 is the identity parameter set, so
 
 ```julia
-crps_min([0, 1, 1, 0], t)       # what the raw ensemble scores
-crps_min(p, t)                  # what the fit scores
+crps_min(MBM(), [0, 1, 1, 0], t)       # what the raw ensemble scores
+crps_min(MBM(), p, t)                  # what the fit scores
 ```
 
 is the in-sample skill of the correction. Both numbers are in the units of the
 variable.
 
-## One table per initialisation hour and lead time
+## The EMOS model
 
-[`MBMParameters`](@ref) holds a whole table for one initialisation hour: the
-lead times, a `Dict` from lead time to ``(α, β, γ_1, γ_2)``, the training window,
-and the in-sample CRPS per lead.
+EMOS [gneiting_calibrated_2005](@cite) replaces the ensemble by a normal
+distribution. With ``\bar{x}`` the ensemble mean and ``s^2`` its variance
+(divided by ``M``, not ``M - 1``),
+
+```math
+Y \sim \mathcal{N}(μ, σ^2), \qquad μ = α + β\bar{x}, \qquad σ^2 = γ_1 + γ_2 s^2
+```
+
+[`emos_correction`](@ref) computes ``(μ, σ^2)`` for one ensemble. ``α`` and
+``β`` mean what they do for MBM. ``γ_1`` is a variance floor and ``γ_2`` scales
+the ensemble variance; both must be non-negative, and not both zero. The
+identity, ``N(\bar{x}, s^2)``, is `[0, 1, 0, 1]`, not MBM's `[0, 1, 1, 0]`.
+
+The CRPS of a normal distribution has a closed form, so the objective is [gneiting_calibrated_2005](@cite)
+
+```math
+J(θ) = \frac{1}{N}\sum_n σ_n\Bigl[z_n\bigl(2Φ(z_n) - 1\bigr) + 2φ(z_n)
+       - \tfrac{1}{\sqrt{π}}\Bigr], \qquad z_n = \frac{y_n - μ_n}{σ_n}
+```
+
+## Fitting EMOS
+
+The EMOS objective is smooth but not convex, so there is no LP.
+[`fitting_crps_naive`](@ref) minimises it with box-constrained L-BFGS and
+forward-mode AD:
 
 ```julia
-params = MBMParameters(Hour(0), leads, pbylead, (first_init, last_init), crps_train)
+p, result = fitting_crps_naive(EMOS(), t)                 # starts at the raw ensemble
+p, result = fitting_crps_naive(EMOS(), t; p0 = p_start)   # or anywhere inside the box
+
+crps_min(EMOS(), [0, 1, 0, 1], t)    # what N(x̄, s²) scores
+crps_min(EMOS(), p, t)               # what the fit scores
+```
+
+Because the optimum is only local, check it from a second start. Ordinary least
+squares of ``y`` on ``\bar{x}`` is a good one: take ``α`` and ``β`` from the
+regression, ``γ_1`` from the residual variance, and ``γ_2 ≈ 0``. `p0` must lie
+strictly inside the box, so use a small positive value such as `1e-10`, not
+exactly zero.
+
+`crps_min(EMOS(), [0, 1, 0, 1], t)` is the score of the *normal approximation*
+to the raw ensemble, not of the ensemble itself, so it differs from
+`crps_min(MBM(), [0, 1, 1, 0], t)`. When comparing the two methods, compare
+out of sample (see [Evaluation](@ref evaluation)).
+
+## One table per initialisation hour and lead time
+
+[`Parameters`](@ref) holds a whole table for one method and initialisation
+hour: the method, the lead times, a `Dict` from lead time to
+``(α, β, γ_1, γ_2)``, the training window, and the in-sample CRPS per lead.
+
+```julia
+params = Parameters(MBM(), Hour(0), leads, pbylead, (first_init, last_init), crps_train)
 ```
 
 **00 UTC and 12 UTC runs are never pooled.** A +12 h forecast from a 00 UTC run
 verifies at midday; the same lead from a 12 UTC run verifies at midnight. Those
 have different bias and different spread, and averaging them gives a parameter
-set correct for neither. Keep one `MBMParameters` per initialisation hour and
+set correct for neither. Keep one `Parameters` per initialisation hour and
 select on `Hour(hour(run.timestamp))`.
 
 Lead time matters for the same reason, which is why the parameters are a `Dict`

@@ -89,7 +89,7 @@ ncases(t::TrainingObject) = length(t.y)
 nmembers(t::TrainingObject) = size(t.E, 1)
 
 """
-    fitting_crps(training_object::TrainingObject) -> (p, model)
+    fitting_crps(::MBM, training_object::TrainingObject) -> (p, model)
  
 Fit the MBM parameters `p = [α, β, γ₁, γ₂]` for one lead time by minimising
 the mean ensemble CRPS `crps_min` over the training slice, solved exactly
@@ -136,8 +136,8 @@ minimiser of `crps_min`, and the tₙₘ are discarded.
 - The objective is bounded below by 0 (an ensemble CRPS is an integral of
   a squared CDF difference), so the LP is always bounded.
 - The raw ensemble θ = (0, 1, 1, 0) is feasible, hence
-  `crps_min(p, training_object) ≤ crps_min([0,1,1,0], training_object)`.
-- `objective_value(model) == crps_min(p, training_object)` up to solver
+  `crps_min(MBM(), p, t) ≤ crps_min(MBM(), [0,1,1,0], t)`.
+- `objective_value(model) == crps_min(MBM(), p, t)` up to solver
   tolerance. If not, the bug is in the data path (`E`, `d`, `y`), not in
   the solver.
 - The minimiser need not be unique: `J` is piecewise linear and can be
@@ -197,14 +197,20 @@ end
 
 
 """
-    fitting_crps_naive(training_object) -> (p, result)
+    fitting_crps_naive(method, training_object; p0) -> (p, result)
 
-Same objective as `fitting_crps`, minimised with box-constrained L-BFGS
-(`Optim.Fminbox`) and forward-mode AD instead of the exact LP. Kept as a
-cross-check of the LP; `result` is the `Optim` result object.
+Minimise `crps_min(method, p, training_object)` with box-constrained L-BFGS
+(`Optim.Fminbox`, γ₁, γ₂ ≥ 0) and forward-mode AD. For MBM it is a
+cross-check of the exact LP in `fitting_crps`; for EMOS it is the fit. The
+EMOS objective is not convex, so `p0` matters; the default starts at (nearly)
+the raw ensemble. `p0` must lie strictly inside the box. `result` is the
+`Optim` result object.
 """
-function fitting_crps_naive(pm::PostProcessingMethod, training_object::TrainingObject)
-    p0 = [1e-10, 1.0, 1e-10, 1.0]        # the raw ensemble
+function fitting_crps_naive(
+    pm::PostProcessingMethod,
+    training_object::TrainingObject;
+    p0 = pm isa MBM ? [1e-10, 1.0, 1.0, 1e-10] : [1e-10, 1.0, 1e-10, 1.0],
+)
     lower = [-Inf, -Inf, 0.0, 0.0]
     upper = fill(Inf, 4)
     f(p) = crps_min(pm, p, training_object)

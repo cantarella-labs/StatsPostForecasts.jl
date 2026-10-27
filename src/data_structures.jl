@@ -2,8 +2,8 @@ import Dates: DateTime, Period
 import Statistics: mean
 
 #=
-Data structures for the member-by-member (MBM) forecast system
-==============================================================
+Data structures for the MBM and EMOS post-processing
+=====================================================
 
 Three layers:
 
@@ -20,8 +20,12 @@ Three layers:
    what `crps_min` consumes.
 
 3. Fitted parameters
-   `MBMParameters` — the four parameters (α, β, γ₁, γ₂) for one lead time,
-   together with the training window they were fitted on.
+   `Parameters` — the four parameters (α, β, γ₁, γ₂) per lead time for one
+   method and initialisation hour, with the training window they were
+   fitted on.
+
+The method is a singleton, `MBM()` or `EMOS()`, passed first to
+`crps_min`, `fitting_crps_naive`, `crps` and `evaluate_forecast`.
 
 Conventions
 -----------
@@ -185,26 +189,27 @@ struct MBM <: PostProcessingMethod end
 struct EMOS <: PostProcessingMethod end
 
 """
-    Parameters{P, F}
+    Parameters{M, P, F, O}
 
-Fitted parameters of a given method, for one init time (ECMWF: 00 or 12h; maybe 06 and 18h).
+Fitted parameters of one post-processing method for one initialisation hour
+(ECMWF: 00 or 12 UTC), all lead times.
 
 # Fields
-- `method::O`, the PostProcessingMethod type (for now MBM or EMOS)
-- `init_time::M`
-- `lead_times::AstractVector{P}`.
-- `p::Vector{F}`: `(α, β, γ₁, γ₂)`, in the order expected by
-  `mbm_correction!` and `crps_min`.
+- `method::O`: the `PostProcessingMethod` (`MBM()` or `EMOS()`); `correct`,
+  `apply_emos_correction` and `evaluate_forecast` dispatch on it.
+- `init_time::M`: initialisation hour, e.g. `Hour(0)`.
+- `lead_times::AbstractVector{P}`.
+- `p::Dict{P,AbstractVector{F}}`: `(α, β, γ₁, γ₂)` per lead time, in the
+  order expected by `crps_min`. MBM: τ = γ₁ + γ₂/d, identity `[0, 1, 1, 0]`.
+  EMOS: σ² = γ₁ + γ₂·s², identity `[0, 1, 0, 1]`.
 - `window::Tuple{DateTime, DateTime}`: first and last initialisation time of
   the training cases, i.e. `extrema(training_object.init_times)`. Lets you
   see at a glance how old a parameter set is when a new forecast comes in.
-- `crps_train::F`: in-sample mean CRPS at `p` (the minimised objective).
-  Useful as a monitoring quantity together with the raw-ensemble CRPS
-  `crps_min([0,1,1,0], t)`.
+- `crps_train::AbstractVector{F}`: in-sample mean CRPS at `p` (the minimised
+  objective), one per lead time. Compare with `crps_min(method, identity, t)`.
 
-A full parameter table for one location/variable is a `Vector{MBMParameters}`
-indexed by lead time; keep separate tables per initialisation hour
-(00 UTC and 12 UTC runs are not pooled).
+Keep one `Parameters` per initialisation hour (00 UTC and 12 UTC runs are
+not pooled).
 """
 struct Parameters{M<:Period,P<:Period,F<:Real, O<:PostProcessingMethod}
     method::O

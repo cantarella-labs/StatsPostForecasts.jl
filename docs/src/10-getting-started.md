@@ -9,12 +9,12 @@ at a specific site with observation data.
 The module also interpolate cleverly the forecast to finer scale time resolution.
 
 1. **Calibrate.** Fit the member-by-member (MBM) correction of
-   [van_schaeybroeck_ensemble_2015](@cite) on past forecast–observation pairs,
-   one parameter set per initialisation hour and lead time.
+   [van_schaeybroeck_ensemble_2015](@cite), or the EMOS normal regression of
+   [gneiting_calibrated_2005](@cite), on past forecast–observation pairs, one
+   parameter set per initialisation hour and lead time.
 2. **Interpolate.** Turn a 3-hourly forecast into a finer one (e.g., 30-minute) by fitting a
    diurnal temperature cycle per sunrise-to-sunrise window. This is slightly better than linear interpolation specially for peaks and valleys of temperature.
-3. **Evaluate.** Score a run against observations, with
-   the ensemble CRPS.
+3. **Evaluate.** Score a run against observations with the CRPS.
 
 ## Installation
 
@@ -61,14 +61,14 @@ pbylead = Dict{Hour,AbstractVector{Float64}}()
 crps_train = Float64[]
 for lt in leads
     t = TrainingObject(past_runs, obs, lt)
-    p, _ = fitting_crps(t)
+    p, _ = fitting_crps(MBM(), t)
     pbylead[lt] = p
-    push!(crps_train, crps_min(p, t))
+    push!(crps_train, crps_min(MBM(), p, t))
 end
-params = MBMParameters(Hour(0), leads, pbylead, window, crps_train)
+params = Parameters(MBM(), Hour(0), leads, pbylead, window, crps_train)
 
 # 4. correct a run the fit has never seen, and score it
-ev = evaluate_forecast(run, obs, params, ϕ, λ)
+ev = evaluate_forecast(MBM(), run, obs, params, ϕ, λ)
 mean(ev.crps_raw), mean(ev.crps_corrected)
 ```
 
@@ -76,6 +76,10 @@ Step 4 does the correction, the 30-minute interpolation of every member, and the
 scoring in one call. If you only want the corrected ensemble, use
 [`correct`](@ref); if you only want a finer time axis, use
 [`interpolate_forecast`](@ref).
+
+For EMOS, fit with `fitting_crps_naive(EMOS(), t)` in step 3 (there is no LP;
+see [Calibration](@ref calibration)), build `Parameters(EMOS(), …)`, and pass
+`EMOS()` in step 4.
 
 ## The same thing, actually run
 
@@ -122,11 +126,11 @@ pbylead = Dict{Hour,AbstractVector{Float64}}()
 crps_train = Float64[]
 for lt in leads
     t = TrainingObject(train, obs, lt)
-    p, _ = fitting_crps(t)
+    p, _ = fitting_crps(MBM(), t)
     pbylead[lt] = p
-    push!(crps_train, crps_min(p, t))
+    push!(crps_train, crps_min(MBM(), p, t))
 end
-params = MBMParameters(Hour(0), leads, pbylead,
+params = Parameters(MBM(), Hour(0), leads, pbylead,
                        (first(train).timestamp, last(train).timestamp), crps_train)
 pbylead[Hour(12)]        # (α, β, γ₁, γ₂) at +12 h
 ```
@@ -134,7 +138,7 @@ pbylead[Hour(12)]        # (α, β, γ₁, γ₂) at +12 h
 Then correct, interpolate and score a run the fit has never seen:
 
 ```@example workflow
-ev = evaluate_forecast(first(test), obs, params, ϕ, λ)
+ev = evaluate_forecast(MBM(), first(test), obs, params, ϕ, λ)
 (raw = mean(ev.crps_raw), corrected = mean(ev.crps_corrected))
 ```
 
@@ -147,13 +151,14 @@ examples want stay out of the package:
 julia --project=examples examples/quickstart.jl
 ```
 
-- **`quickstart.jl`** — six runs, two lead times, in-sample CRPS. The cheap one,
-  about 70 MB of download.
-- **`end_to_end.jl`** — the full picture at one station: fit on a month of runs,
-  correct the following week, interpolate, verify, and draw both the six-day
-  forecast and the CRPS against lead time. Downloads about 11 GB the first time,
+- **`quickstart.jl`** — six runs, two lead times, in-sample CRPS of MBM and
+  EMOS against the raw ensemble. The cheap one, about 70 MB of download.
+- **`end_to_end.jl`** — the full picture at one station: fit MBM and EMOS on a
+  month of runs, correct the following week, interpolate, verify, and draw both
+  the six-day forecast and the CRPS against lead time for raw, MBM and EMOS. Downloads about 11 GB the first time,
   then runs from cache.
-- **`full_fit.jl`** — the whole station record, two lead times.
+- **`full_fit.jl`** — the whole station record, two lead times, both methods;
+  saves one `Parameters` table per method.
 
 ## Where to go next
 

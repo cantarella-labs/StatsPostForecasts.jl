@@ -1,5 +1,5 @@
 #=
-MBM fit of 2 m temperature at Argamasilla de Alba on the whole station
+MBM and EMOS fits of 2 m temperature at Argamasilla de Alba on the whole station
 record: every 00 UTC ENS run on the Google mirror of ECMWF open data (the
 0.25° ENS starts there in early 2024) up to the last observation, 2026-07-21.
 
@@ -81,30 +81,36 @@ println(
     rpad("N", 6),
     rpad("CRPS raw", 12),
     rpad("CRPS mbm", 12),
-    "(α, β, γ₁, γ₂)",
+    rpad("CRPS emos", 12),
+    rpad("MBM (α, β, γ₁, γ₂)", 32),
+    "EMOS (α, β, γ₁, γ₂)",
 )
 leads = collect(Hour.(STEPS))   # STEPS is a tuple here; the struct wants a vector
-pbylead = Dict{Hour,AbstractVector{Float64}}()
-crps_train = Float64[]
+pbylead = Dict(m => Dict{Hour,AbstractVector{Float64}}() for m in (MBM(), EMOS()))
+crps_train = Dict(m => Float64[] for m in (MBM(), EMOS()))
 window = (DateTime(0), DateTime(0))
 for lt in leads
     t = TrainingObject(inits, obs, lt)
-    p, _ = fitting_crps(t)
-    pbylead[lt] = p
-    push!(crps_train, crps_min(p, t))
+    pm, _ = fitting_crps(MBM(), t)
+    pe, _ = fitting_crps_naive(EMOS(), t)
+    for (m, p) in ((MBM(), pm), (EMOS(), pe))
+        pbylead[m][lt] = p
+        push!(crps_train[m], crps_min(m, p, t))
+    end
     global window = extrema(t.init_times)
     @printf(
-        "%-10s%-6d%-12.3f%-12.3f(%.2f, %.3f, %.3f, %.3f)\n",
+        "%-10s%-6d%-12.3f%-12.3f%-12.3f%-32s%s\n",
         string(lt),
         ncases(t),
-        crps_min([0, 1, 1, 0], t),
-        crps_min(p, t),
-        p[1],
-        p[2],
-        p[3],
-        p[4]
+        crps_min(MBM(), [0, 1, 1, 0], t),
+        last(crps_train[MBM()]),
+        last(crps_train[EMOS()]),
+        @sprintf("(%.2f, %.3f, %.3f, %.3f)", pm...),
+        @sprintf("(%.2f, %.3f, %.3f, %.3f)", pe...)
     )
 end
-# one MBMParameters per initialisation hour, holding every lead time
-table = MBMParameters(Hour(0), leads, pbylead, window, crps_train)
-serialize(joinpath(dirname(CACHE), "argamasilla_2t_00z_mbm.jls"), table)
+# one Parameters per method and initialisation hour, holding every lead time
+for (m, name) in ((MBM(), "mbm"), (EMOS(), "emos"))
+    table = Parameters(m, Hour(0), leads, pbylead[m], window, crps_train[m])
+    serialize(joinpath(dirname(CACHE), "argamasilla_2t_00z_$name.jls"), table)
+end

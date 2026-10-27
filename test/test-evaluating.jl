@@ -21,24 +21,25 @@
 
     ens = [1.0, 2.5, 3.0, 4.75, 6.0]
     for y in (-4.0, 0.5, 3.0, 5.5, 12.0)        # inside the ensemble, and far outside it
-        @test SPF.crps(ens, y) ≈ crps_integrated(ens, y) rtol = 2e-3
+        @test SPF.crps(SPF.MBM(), ens, y) ≈ crps_integrated(ens, y) rtol = 2e-3
     end
 
     # a deterministic forecast scores its absolute error; a perfect one scores zero
-    @test SPF.crps([4.0, 4.0, 4.0], 6.5) ≈ 2.5
-    @test SPF.crps([4.0, 4.0, 4.0], 4.0) ≈ 0 atol = 1e-12
-    @test SPF.crps(ens, 3.0) ≥ 0
+    @test SPF.crps(SPF.MBM(), [4.0, 4.0, 4.0], 6.5) ≈ 2.5
+    @test SPF.crps(SPF.MBM(), [4.0, 4.0, 4.0], 4.0) ≈ 0 atol = 1e-12
+    @test SPF.crps(SPF.MBM(), ens, 3.0) ≥ 0
 
     # invariances: shifting both, scaling both, and reordering the members
-    @test SPF.crps(ens .+ 10, 13.0) ≈ SPF.crps(ens, 3.0)
-    @test SPF.crps(2 .* ens, 6.0) ≈ 2 * SPF.crps(ens, 3.0)
-    @test SPF.crps(reverse(ens), 3.0) ≈ SPF.crps(ens, 3.0)
+    @test SPF.crps(SPF.MBM(), ens .+ 10, 13.0) ≈ SPF.crps(SPF.MBM(), ens, 3.0)
+    @test SPF.crps(SPF.MBM(), 2 .* ens, 6.0) ≈ 2 * SPF.crps(SPF.MBM(), ens, 3.0)
+    @test SPF.crps(SPF.MBM(), reverse(ens), 3.0) ≈ SPF.crps(SPF.MBM(), ens, 3.0)
 
     # ---- correct
     t0 = DateTime(2026, 1, 1)
     raw = [3.0, 1.0, 2.0, 5.0]                  # deliberately unsorted
     run = SPF.InitForecast(t0, [SPF.Forecast(Hour(6), copy(raw))], false)
-    pars(lt, p) = SPF.MBMParameters(
+    pars(lt, p) = SPF.Parameters(
+        SPF.MBM(),
         Hour(0),
         [lt],
         Dict{Hour,AbstractVector{Float64}}(lt => p),
@@ -66,9 +67,83 @@
     @test_throws KeyError SPF.correct(run, pars(Hour(3), [0.0, 1.0, 1.0, 0.0]))
 end
 
+
+@testitem "CRPS and the EMOS correction" tags=[:unit] begin
+    using Dates
+    using Statistics: mean, var
+    import StatsPostForecasts as SPF
+
+    # ---- crps against its definition ∫(Φ((t − μ)/σ) − 1{t ≥ y})² dt. The integrand
+    # is negligible beyond 10σ of both μ and y.
+    function crps_integrated(μ, σ², y; n = 200_001)
+        σ = √σ²
+        lo, hi = min(μ, y) - 10σ, max(μ, y) + 10σ
+        h = (hi - lo) / (n - 1)
+        s = 0.0
+        for i in 1:n
+            t = lo + (i - 1) * h
+            s += abs2(SPF.cdf(SPF.std_normal, (t - μ) / σ) - (t >= y ? 1.0 : 0.0))
+        end
+        return s * h
+    end
+    for y in (27.4, 26.0, 31.0, 45.0)           # at the mean, within 2σ, far outside
+        @test SPF.crps(SPF.EMOS(), 27.4, 4.0, y) ≈ crps_integrated(27.4, 4.0, y) rtol = 1e-3
+    end
+
+    # known value: CRPS(N(0, 1), 0) = 2φ(0) − 1/√π = (√2 − 1)/√π
+    @test SPF.crps(SPF.EMOS(), 0.0, 1.0, 0.0) ≈ (√2 - 1) / √π
+
+    # invariances: shifting μ and y together, scaling μ, σ and y together
+    @test SPF.crps(SPF.EMOS(), 37.4, 4.0, 41.0) ≈ SPF.crps(SPF.EMOS(), 27.4, 4.0, 31.0)
+    @test SPF.crps(SPF.EMOS(), 3 * 27.4, 9 * 4.0, 3 * 31.0) ≈
+          3 * SPF.crps(SPF.EMOS(), 27.4, 4.0, 31.0)
+
+    # a vanishing spread scores the absolute error
+    @test SPF.crps(SPF.EMOS(), 4.0, 1e-12, 6.5) ≈ 2.5 rtol = 1e-5
+
+    # ---- emos_correction: μ = α + β·x̄, σ² = γ₁ + γ₂·s²
+    @test all(SPF.emos_correction([2.0, 0.5, 1.5, 0.75], 4.0, 2.0) .≈ (4.0, 3.0))
+
+    # ---- apply_emos_correction
+    t0 = DateTime(2026, 1, 1)
+    raw = [3.0, 1.0, 2.0, 5.0]
+    run = SPF.InitForecast(t0, [SPF.Forecast(Hour(6), copy(raw))], false)
+    pars(lt, p) = SPF.Parameters(
+        SPF.EMOS(),
+        Hour(0),
+        [lt],
+        Dict{Hour,AbstractVector{Float64}}(lt => p),
+        (t0, t0),
+        [0.0],
+    )
+    x̄, s² = mean(raw), var(raw; corrected = false)
+
+    # (α, β, γ₁, γ₂) = (0, 1, 0, 1) is the identity: N(x̄, s²)
+    id = SPF.apply_emos_correction(run, pars(Hour(6), [0.0, 1.0, 0.0, 1.0]))
+    @test id.timestamp == t0
+    @test id.lead_times == [Hour(6)]
+    @test id.μ ≈ [x̄]
+    @test id.σ² ≈ [s²]
+
+    p = [2.0, 0.5, 1.5, 0.75]
+    c = SPF.apply_emos_correction(run, pars(Hour(6), p))
+    @test c.μ ≈ [p[1] + p[2] * x̄]
+    @test c.σ² ≈ [p[3] + p[4] * s²]
+
+    # the raw run is left untouched
+    @test run.forecasts[1].ensemble == raw
+    @test !run.corrected
+
+    # guards: corrected input, missing lead time, and EMOS parameters fed to the MBM map
+    done = SPF.InitForecast(t0, [SPF.Forecast(Hour(6), copy(raw))], true)
+    @test_throws ArgumentError SPF.apply_emos_correction(done, pars(Hour(6), p))
+    @test_throws KeyError SPF.apply_emos_correction(run, pars(Hour(3), p))
+    @test_throws MethodError SPF.correct(run, pars(Hour(6), p))
+end
+
 @testitem "evaluate_forecast on an ENS slice" tags=[:integration, :network] begin
     using Dates
-    using Statistics: mean
+    using Statistics: mean, var
     import StatsPostForecasts as SPF
 
     # a real run, 3 members, 3-hourly over one day — enough points in the
@@ -91,7 +166,8 @@ end
     obs = SPF.Observations(grid, 290.0 .+ 5.0 .* sin.(2π .* hrs ./ 24))
 
     leads = [fc.lead_time for fc in run.forecasts]
-    identity = SPF.MBMParameters(
+    identity = SPF.Parameters(
+        SPF.MBM(),
         Hour(0),
         leads,
         Dict{Hour,AbstractVector{Float64}}(lt => [0.0, 1.0, 1.0, 0.0] for lt in leads),
@@ -99,7 +175,7 @@ end
         zeros(length(leads)),
     )
 
-    ev = SPF.evaluate_forecast(run, obs, identity, ϕ, λ)
+    ev = SPF.evaluate_forecast(SPF.MBM(), run, obs, identity, ϕ, λ)
 
     # the evaluation stays inside the run's span — outside it the interpolation
     # extrapolates, which is not evaluation
@@ -121,10 +197,37 @@ end
     @test ev.raw[k, :] ≈ (fc12.ensemble)
 
     # and the reported score is what `crps` gives for that row
-    @test ev.crps_raw[k] ≈ SPF.crps(ev.raw[k, :], ev.observed[k])
+    @test ev.crps_raw[k] ≈ SPF.crps(SPF.MBM(), ev.raw[k, :], ev.observed[k])
     @test all(≥(0), ev.crps_raw)
 
     # no overlap with the observations is an error, not an empty result
     far = SPF.Observations([run.timestamp - Day(10)], [290.0])
-    @test_throws ArgumentError SPF.evaluate_forecast(run, far, identity, ϕ, λ)
+    @test_throws ArgumentError SPF.evaluate_forecast(SPF.MBM(), run, far, identity, ϕ, λ)
+
+    # ---- EMOS on the same run, identity parameters: N(x̄, s²) at every lead
+    emos_id = SPF.Parameters(
+        SPF.EMOS(),
+        Hour(0),
+        leads,
+        Dict{Hour,AbstractVector{Float64}}(lt => [0.0, 1.0, 0.0, 1.0] for lt in leads),
+        (run.timestamp, run.timestamp),
+        zeros(length(leads)),
+    )
+    ee = SPF.evaluate_forecast(SPF.EMOS(), run, obs, emos_id, ϕ, λ)
+
+    # same window and raw scoring as MBM; the corrected forecast is [μ σ²]
+    @test ee.times == ev.times
+    @test ee.raw ≈ ev.raw
+    @test ee.crps_raw ≈ ev.crps_raw
+    @test size(ee.corrected) == (length(ee.times), 2)
+    @test all(>(0), ee.corrected[:, 2])
+
+    # exact at the forecast times: μ through the residual add-back, σ² as a linear knot
+    @test ee.corrected[k, 1] ≈ mean(fc12.ensemble)
+    @test ee.corrected[k, 2] ≈ var(fc12.ensemble; corrected = false)
+
+    @test ee.crps_corrected[k] ≈
+          SPF.crps(SPF.EMOS(), ee.corrected[k, 1], ee.corrected[k, 2], ee.observed[k])
+    @test all(≥(0), ee.crps_corrected)
+    @test_throws ArgumentError SPF.evaluate_forecast(SPF.EMOS(), run, far, emos_id, ϕ, λ)
 end

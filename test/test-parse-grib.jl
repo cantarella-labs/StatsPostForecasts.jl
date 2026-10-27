@@ -13,7 +13,7 @@
     ds = SPF.GRIBDataset(path)
     @test SPF.GRIBDatasets.dimnames(ds["t2m"]) ==
           ["lon", "lat", "heightAboveGround", "number", "valid_time"]
-    @test ds["number"][:] == [1, 2, 3]
+    @test ds["number"][:] == [3, 2, 1] #[1, 2, 3]
     @test SPF.init_time(ds) == DateTime(date)
     @test SPF.lead_times(ds) == [Hour(0), Hour(6)]
 

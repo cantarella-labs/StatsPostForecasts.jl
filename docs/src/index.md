@@ -11,7 +11,7 @@ a raw ensemble against station observations, interpolate it onto the time
 resolution a product needs, and score the result out of sample.
 
 ```julia
-ev = evaluate_forecast(run, obs, params, ϕ, λ)
+ev = evaluate_forecast(MBM(), run, obs, params, ϕ, λ)
 mean(ev.crps_raw), mean(ev.crps_corrected)
 ```
 
@@ -25,6 +25,12 @@ fitted per lead time by minimising the ensemble CRPS (their "CRPS MIN"
 variant, Sect. 3.5). The objective is piecewise linear, so the fit is solved
 exactly as a linear program.
 
+It also implements EMOS, the non-homogeneous Gaussian regression of
+[gneiting_calibrated_2005](@cite): the forecast is a normal distribution whose
+mean is affine in the ensemble mean and whose variance is affine in the
+ensemble variance, fitted by minimising the closed-form normal CRPS. The
+method is chosen by passing `MBM()` or `EMOS()` as the first argument.
+
 Sub-daily interpolation uses the diurnal temperature cycle of
 [gottsche_modelling_2001](@cite), fitted per sunrise-to-sunrise window, with the
 fit residual added back so the curve still passes through every forecast value.
@@ -35,8 +41,8 @@ fit residual added back so the curve still passes through every forecast value.
   one page.
 - [Data model](@ref data) — the containers, getting ECMWF open data in, and
   bringing your own.
-- [Calibration](@ref calibration) — what the MBM parameters mean and how to fit
-  them.
+- [Calibration](@ref calibration) — what the MBM and EMOS parameters mean and
+  how to fit them.
 - [Interpolation](@ref interpolation) — the diurnal-cycle model, and measured
   guidance on when it is worth using.
 - [Evaluation](@ref evaluation) — scoring out of sample without fooling

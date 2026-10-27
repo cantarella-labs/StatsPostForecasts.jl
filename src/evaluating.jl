@@ -6,7 +6,7 @@ import DataInterpolations: LinearInterpolation
 Out-of-sample evaluation
 ========================
 
-`training.jl` fits the MBM parameters; this file spends them. Given a run the
+`training.jl` fits the parameters; this file spends them. Given a run the
 fit has never seen, a parameter set and the station record, it corrects the
 run, interpolates every member onto the observation times, and scores both the
 raw and the corrected ensemble.
@@ -25,39 +25,44 @@ outside the ensemble, which is exactly the case worth scoring.
 =#
 
 """
-    crps(ensemble, y) -> Real
+    crps(::MBM, ensemble, y) -> Real
 
 Ensemble CRPS of one forecast against one observation, in the units of the
 variable (lower is better). Uses the closed form above, so it agrees with
-`crps_min` term for term and needs no quadrature.
+`crps_min(MBM(), …)` term for term and needs no quadrature.
 """
 function crps(::MBM, x::AbstractVector, y)
     xs = sort(x)
     return mean(abs.(xs .- y)) - mean_abs_diff(xs) / 2
 end
 
+"""
+    crps(::EMOS, μ, σ², y) -> Real
+
+CRPS of the normal forecast N(μ, σ²) against one observation, in closed form
+([gneiting_calibrated_2005](@cite)): σ·[z(2Φ(z) − 1) + 2φ(z) − 1/√π] with
+z = (y − μ)/σ.
+"""
 function crps(::EMOS, μ, σ², y)
     σ = √σ²
     z = (y-μ)/σ
-    crps = σ*(z * (2*cdf(std_normal, z)-1) * (2*pdf(std_normal, z)-1/√(π)))
+    crps = σ*(z * (2*cdf(std_normal, z)-1) + (2*pdf(std_normal, z)-1/√(π)))
     return crps
 end
 
 """
-    correct(run::InitForecast, params::MBMParameters) -> InitForecast
+    correct(run::InitForecast, params::Parameters{…,MBM}) -> InitForecast
 
 Apply the fitted parameters to every lead time of one run, member by member.
 
-Members are sorted ascending first, so member `k` of the result is the k-th
-coldest at that lead time — the ordering `mean_abs_diff` needs and the one
-that makes an ensemble envelope meaningful across lead times. The input run is
-left untouched: a raw run stays raw, and correcting twice gives the same
-answer.
+Members keep the model's order (the map is elementwise; only the spread
+`mean_abs_diff` is computed on a sorted copy). The input run is left
+untouched, and correcting an already corrected run throws.
 
 Throws if `params` has no entry for one of the run's lead times, rather than
 silently leaving that lead uncorrected.
 """
-function correct(run::InitForecast, params::Parameters)
+function correct(run::InitForecast, params::Parameters{<:Any,<:Any,<:Any,MBM})
     run.corrected && throw(ArgumentError("run at $(run.timestamp) is already corrected"))
     fcs = map(run.forecasts) do fc
         haskey(params.p, fc.lead_time) ||
@@ -81,7 +86,7 @@ correct(runs::AbstractVector{<:InitForecast}, params::AbstractDict) =
     [correct(run, params[Hour(hour(run.timestamp))]) for run in runs]
 
 """
-    evaluate_forecast(run, obs, params, ϕ, λ) -> NamedTuple
+    evaluate_forecast(::MBM, run, obs, params, ϕ, λ) -> NamedTuple
 
 Score one held-out run against the station record.
 
@@ -94,8 +99,8 @@ Only observations inside the run's own span are used — outside it
 `interpolate_forecast` extrapolates, which is not evaluation.
 
 Returns `(; times, observed, raw, corrected, crps_raw, crps_corrected)`, where
-`raw` and `corrected` are `length(times) × M` matrices with members sorted
-ascending per lead time.
+`raw` and `corrected` are `length(times) × M` matrices, one column per member
+in the model's member order.
 """
 function evaluate_forecast(
     ::MBM,
@@ -140,40 +145,50 @@ function evaluate_forecast(
         observed = y,
         raw = raw,
         corrected = cor,
-        crps_raw = [crps(view(raw, i, :), y[i]) for i in eachindex(times)],
-        crps_corrected = [crps(view(cor, i, :), y[i]) for i in eachindex(times)],
+        crps_raw = [crps(MBM(), view(raw, i, :), y[i]) for i in eachindex(times)],
+        crps_corrected = [crps(MBM(), view(cor, i, :), y[i]) for i in eachindex(times)],
     )
 end
 
-function apply_emos_correction(run::InitForecast, params::Parameters)
+"""
+    apply_emos_correction(run, params) -> (; timestamp, lead_times, μ, σ²)
+
+Predictive distribution N(μ, σ²) at every lead time of one raw run, from
+[`emos_correction`](@ref) applied to that lead's ensemble mean and
+(uncorrected) variance. `μ` and `σ²` are vectors aligned with `lead_times`.
+
+Throws if the run is already corrected, or if `params` has no entry for one of
+the run's lead times.
+"""
+function apply_emos_correction(run::InitForecast, params::Parameters{<:Any,<:Any,<:Any,EMOS})
     run.corrected && throw(ArgumentError("run at $(run.timestamp) is already corrected"))
-    fcs = map(run.forecasts) do fc
+    stats = map(run.forecasts) do fc
         haskey(params.p, fc.lead_time) ||
             throw(KeyError("no EMOS parameters for lead time $(fc.lead_time)"))
         x = fc.ensemble
         x_mean = mean(x)
-        s² = var(x; corrected = false, mean = x_mean)
-        [x_mean, s²]
+        emos_correction(params.p[fc.lead_time], x_mean, var(x; corrected = false, mean = x_mean))
     end
-    return (:timestamp => run.timestamp, :cor_stats=>fcs)
+    return (
+        timestamp = run.timestamp,
+        lead_times = [fc.lead_time for fc in run.forecasts],
+        μ = first.(stats),
+        σ² = last.(stats),
+    )
 end
 
 """
-    evaluate_forecast(run, obs, params, ϕ, λ) -> NamedTuple
+    evaluate_forecast(::EMOS, run, obs, params, ϕ, λ) -> NamedTuple
 
-Score one held-out run against the station record.
-
-The run is corrected with `params`, each member is interpolated onto the
-observation times with `interpolate_forecast` (diurnal-cycle fit per
-sunrise-to-sunrise window), and the raw and corrected ensembles are scored
-with `crps` at every one of those times.
-
-Only observations inside the run's own span are used — outside it
-`interpolate_forecast` extrapolates, which is not evaluation.
+EMOS counterpart of the MBM method: same observation window and raw-ensemble
+scoring, but the corrected forecast is a normal distribution. Its mean μ is
+interpolated with `interpolate_forecast` (it follows the diurnal cycle); its
+variance σ² is interpolated linearly in time.
 
 Returns `(; times, observed, raw, corrected, crps_raw, crps_corrected)`, where
-`raw` and `corrected` are `length(times) × M` matrices with members sorted
-ascending per lead time.
+`raw` is `length(times) × M` and `corrected` is `length(times) × 2` with
+columns `[μ σ²]`. `crps_raw` is the ensemble CRPS, `crps_corrected` the
+normal CRPS.
 """
 function evaluate_forecast(
     ::EMOS,
@@ -194,38 +209,26 @@ function evaluate_forecast(
 
     F = float(eltype(obs.values))
     M = length(first(run.forecasts).ensemble)
-    raw = Matrix{F}(undef, length(times), M) # one col per ensemble
-    cor = Matrix{F}(undef, length(times), 2) # first col is the mean , the second col the variance
-    # In EMOS we use the fancy interpolator for the mean and linearly interpolate the variance:
+    raw = Matrix{F}(undef, length(times), M) # one col per member
+    cor = Matrix{F}(undef, length(times), 2) # [μ σ²]
     for m in 1:M
         raw[:, m] .= interpolate_forecast(
-                fc_times,
-                [mean(fc.ensemble[m]) for fc in run.forecasts],
-                times,
-                ϕ,
-                λ,
-            )
-    end
-
-    cor[:, 1] .= interpolate_forecast(
-        fc_times,
-        [fc[1] for fc in correction.cor_stats],
-        times,
-        ϕ,
-        λ,
+            fc_times,
+            [fc.ensemble[m] for fc in run.forecasts],
+            times,
+            ϕ,
+            λ,
         )
-    A = LinearInterpolation([fc[2] for fc in correction.cor_stats], fc_times)
-    cor[:, 2] = A(times)
-
-    mbm = MBM()
-    emos = EMOS()
+    end
+    cor[:, 1] .= interpolate_forecast(fc_times, correction.μ, times, ϕ, λ)
+    cor[:, 2] .= LinearInterpolation(correction.σ², Dates.value.(fc_times)).(Dates.value.(times))
 
     return (
         times = times,
         observed = y,
         raw = raw,
         corrected = cor,
-        crps_raw = [crps(mbm, view(raw, i, :), y[i]) for i in eachindex(times)],
-        crps_corrected = [crps(emos, view(cor, i, 1), view(cor, i, 2), y[i]) for i in eachindex(times)],
+        crps_raw = [crps(MBM(), view(raw, i, :), y[i]) for i in eachindex(times)],
+        crps_corrected = [crps(EMOS(), cor[i, 1], cor[i, 2], y[i]) for i in eachindex(times)],
     )
 end

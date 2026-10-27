@@ -6,13 +6,14 @@ Argamasilla de Alba (Ciudad Real). ECMWF ENS 2 m temperature, 10 members,
 3-hourly out to +144 h, verified against the SIAR station record (30-minute
 means).
 
-    1. fit    the MBM parameters on past runs — one set per lead time, for
-              one initialisation hour
-    2. correct a week of later runs, none of which the fit has seen
+    1. fit    the MBM and the EMOS parameters on past runs — one set per lead
+              time, for one initialisation hour
+    2. correct a week of later runs, none of which the fit has seen. MBM
+       returns a corrected ensemble, EMOS a normal distribution N(μ, σ²)
     3. interpolate each corrected forecast onto the 30-minute grid the
        product needs, through the diurnal cycle rather than by chords
     4. compare all of it with what the station actually measured, and draw
-       the last run: six days of corrected ensemble against the station
+       the last run: six days of both corrections against the station
 
 Parameters are per (initialisation hour, lead time). 00 UTC and 12 UTC runs
 have different error structure — a +12 h forecast from 00 UTC verifies at
@@ -90,7 +91,7 @@ end
 # ---- 3. fit: one parameter set per lead time, trained on past runs only
 train = [runs[d] for d in TRAIN_DATES]
 println(
-    "\nMBM fit, $(INIT_HOUR) UTC runs, $(length(train)) of them, " *
+    "\nMBM and EMOS fits, $(INIT_HOUR) UTC runs, $(length(train)) of them, " *
     "$(first(TRAIN_DATES)) … $(last(TRAIN_DATES))   (every 12 h shown)",
 )
 println(
@@ -98,59 +99,72 @@ println(
     rpad("N", 5),
     rpad("CRPS raw", 11),
     rpad("CRPS mbm", 11),
-    "(α, β, γ₁, γ₂)",
+    rpad("CRPS emos", 11),
+    rpad("MBM (α, β, γ₁, γ₂)", 32),
+    "EMOS (α, β, γ₁, γ₂)",
 )
 leads = Hour.(STEPS)
-pbylead = Dict{Hour,AbstractVector{Float64}}()
-crps_train = Float64[]
+pbylead = Dict(m => Dict{Hour,AbstractVector{Float64}}() for m in (MBM(), EMOS()))
+crps_train = Dict(m => Float64[] for m in (MBM(), EMOS()))
 window = (DateTime(first(TRAIN_DATES)), DateTime(last(TRAIN_DATES)))
 for lt in leads
     t = TrainingObject(train, obs, lt)
-    p, _ = fitting_crps(t)
-    pbylead[lt] = p
-    push!(crps_train, crps_min(p, t))
+    pm, _ = fitting_crps(MBM(), t)            # exact LP
+    pe, _ = fitting_crps_naive(EMOS(), t)     # L-BFGS, from N(x̄, s²)
+    for (m, p) in ((MBM(), pm), (EMOS(), pe))
+        pbylead[m][lt] = p
+        push!(crps_train[m], crps_min(m, p, t))
+    end
     lt in REPORT_LEADS && @printf(
-        "%-10s%-5d%-11.3f%-11.3f(%.2f, %.3f, %.3f, %.3f)\n",
+        "%-10s%-5d%-11.3f%-11.3f%-11.3f%-32s%s\n",
         string(lt),
         ncases(t),
-        crps_min([0, 1, 1, 0], t),
-        crps_min(p, t),
-        p...
+        crps_min(MBM(), [0, 1, 1, 0], t),
+        last(crps_train[MBM()]),
+        last(crps_train[EMOS()]),
+        @sprintf("(%.2f, %.3f, %.3f, %.3f)", pm...),
+        @sprintf("(%.2f, %.3f, %.3f, %.3f)", pe...)
     )
 end
-# one table per initialisation hour — 00 and 12 UTC are never pooled
-params = MBMParameters(Hour(parse(Int, INIT_HOUR)), leads, pbylead, window, crps_train)
+# one table per method and initialisation hour — 00 and 12 UTC are never pooled
+init_hour = Hour(parse(Int, INIT_HOUR))
+params_mbm = Parameters(MBM(), init_hour, leads, pbylead[MBM()], window, crps_train[MBM()])
+params_emos = Parameters(EMOS(), init_hour, leads, pbylead[EMOS()], window, crps_train[EMOS()])
 
-# ---- 4. every held-out run: correct it, interpolate every member, score it
+# ---- 4. every held-out run: correct it, interpolate, score it
 #         `evaluate_forecast` does all three and returns the raw and corrected
 #         CRPS at every observation time inside the run's span
 ϕ, λ = STATION
-evals = [evaluate_forecast(runs[d], obs, params, ϕ, λ) for d in TEST_DATES]
+evals_mbm = [evaluate_forecast(MBM(), runs[d], obs, params_mbm, ϕ, λ) for d in TEST_DATES]
+evals_emos = [evaluate_forecast(EMOS(), runs[d], obs, params_emos, ϕ, λ) for d in TEST_DATES]
 
 points = DataFrame(
     init = DateTime[],
     lead = Hour[],             # at the 3-hourly steps
     observed = Float64[],
     raw = Float64[],
-    mbm = Float64[],
+    mbm = Float64[],           # corrected ensemble mean
+    emos = Float64[],          # μ of the predictive normal
 )
-for (d, ev) in zip(TEST_DATES, evals)
+for d in TEST_DATES
     run = runs[d]
-    cor = correct(run, params)
-    for (fc, cfc) in zip(run.forecasts, cor.forecasts)
+    cor = correct(run, params_mbm)
+    nrm = apply_emos_correction(run, params_emos)
+    for (fc, cfc, μ) in zip(run.forecasts, cor.forecasts, nrm.μ)
         y = observation_at(obs, run.timestamp + fc.lead_time)
         y === nothing && continue
         push!(
             points,
-            (run.timestamp, fc.lead_time, y, mean(fc.ensemble), mean(cfc.ensemble)),
+            (run.timestamp, fc.lead_time, y, mean(fc.ensemble), mean(cfc.ensemble), μ),
         )
     end
 end
 
 # ---- 5. what it bought, pooled over the week
 rmse(a, b) = sqrt(mean(abs2, a .- b))
-allraw = reduce(vcat, [ev.crps_raw for ev in evals])
-allcor = reduce(vcat, [ev.crps_corrected for ev in evals])
+allraw = reduce(vcat, [ev.crps_raw for ev in evals_mbm])
+allmbm = reduce(vcat, [ev.crps_corrected for ev in evals_mbm])
+allemos = reduce(vcat, [ev.crps_corrected for ev in evals_emos])
 println(
     "\n$(length(TEST_DATES)) held-out runs, $(first(TEST_DATES)) … $(last(TEST_DATES)), " *
     "each to +$(last(STEPS)) h, verified against the station (K)",
@@ -165,28 +179,36 @@ println(
     rmse(points.mbm, points.observed)
 )
 @printf(
-    "  30-minute, ensemble CRPS raw       %.3f   (N = %d)\n",
+    "  3-hourly, EMOS μ                   RMSE = %.2f\n",
+    rmse(points.emos, points.observed)
+)
+@printf(
+    "  30-minute, CRPS raw ensemble       %.3f   (N = %d)\n",
     mean(allraw),
     length(allraw)
 )
-@printf("  30-minute, ensemble CRPS corrected %.3f\n", mean(allcor))
+@printf("  30-minute, CRPS MBM ensemble       %.3f\n", mean(allmbm))
+@printf("  30-minute, CRPS EMOS normal        %.3f\n", mean(allemos))
 
 bylead = combine(
     groupby(points, :lead),
     [:raw, :observed] => rmse => :raw,
     [:mbm, :observed] => rmse => :mbm,
+    [:emos, :observed] => rmse => :emos,
     nrow => :N,
 )
-println("\nRMSE of the ensemble mean by lead time (K, every 12 h):")
+println("\nRMSE of the forecast mean by lead time (K, every 12 h):")
 println(bylead[in(REPORT_LEADS).(bylead.lead), :])
 
 # ---- 6. the figure: the forecast itself, and what the CRPS does with lead time
-ev = last(evals)                                  # the last held-out run
+ev = last(evals_mbm)                              # the last held-out run
+ee = last(evals_emos)
 shown = runs[last(TEST_DATES)]
 lead_h(t) = Dates.value(t - shown.timestamp) / 3.6e6
 lo = [minimum(view(ev.corrected, i, :)) for i in eachindex(ev.times)]
 hi = [maximum(view(ev.corrected, i, :)) for i in eachindex(ev.times)]
 mid = [mean(view(ev.corrected, i, :)) for i in eachindex(ev.times)]
+μ, σ = ee.corrected[:, 1], sqrt.(ee.corrected[:, 2])
 
 fig = Figure(size = (1400, 860))
 ax1 = Axis(
@@ -201,7 +223,7 @@ band!(
     lo .- 273.15,
     hi .- 273.15;
     color = (:crimson, 0.18),
-    label = "corrected ensemble, coldest to warmest member",
+    label = "MBM ensemble, coldest to warmest member",
 )
 lines!(
     ax1,
@@ -209,7 +231,23 @@ lines!(
     mid .- 273.15;
     color = :crimson,
     linewidth = 2,
-    label = "corrected ensemble mean, diurnal-cycle fit (30 min)",
+    label = "MBM ensemble mean, diurnal-cycle fit (30 min)",
+)
+band!(
+    ax1,
+    lead_h.(ee.times),
+    μ .- 1.645 .* σ .- 273.15,
+    μ .+ 1.645 .* σ .- 273.15;
+    color = (:darkorange, 0.15),
+    label = "EMOS 5–95 % interval",
+)
+lines!(
+    ax1,
+    lead_h.(ee.times),
+    μ .- 273.15;
+    color = :darkorange,
+    linewidth = 2,
+    label = "EMOS μ",
 )
 lines!(
     ax1,
@@ -234,25 +272,33 @@ axislegend(ax1; position = :lt, framevisible = false, labelsize = 11)
 ax2 = Axis(
     fig[2, 1];
     xlabel = "lead time (h)",
-    ylabel = "ensemble CRPS (K)",
+    ylabel = "CRPS (K)",
     xticks = 0:24:last(STEPS),
-    title = "CRPS of the interpolated ensemble, mean over $(length(evals)) held-out runs",
+    title = "CRPS of the interpolated forecast, mean over $(length(TEST_DATES)) held-out runs",
 )
 # keyed by lead time, not by position: a run with a missing observation must
 # not shift every later point into the wrong lead
-crpsdf = DataFrame(lead = Float64[], raw = Float64[], mbm = Float64[])
-for (d, e) in zip(TEST_DATES, evals), i in eachindex(e.times)
+crpsdf = DataFrame(lead = Float64[], raw = Float64[], mbm = Float64[], emos = Float64[])
+for (d, e, f) in zip(TEST_DATES, evals_mbm, evals_emos), i in eachindex(e.times)
     push!(
         crpsdf,
         (
             Dates.value(e.times[i] - runs[d].timestamp) / 3.6e6,
             e.crps_raw[i],
             e.crps_corrected[i],
+            f.crps_corrected[i],    # same times: both use the run's own span
         ),
     )
 end
-bylead_crps =
-    sort(combine(groupby(crpsdf, :lead), :raw => mean => :raw, :mbm => mean => :mbm), :lead)
+bylead_crps = sort(
+    combine(
+        groupby(crpsdf, :lead),
+        :raw => mean => :raw,
+        :mbm => mean => :mbm,
+        :emos => mean => :emos,
+    ),
+    :lead,
+)
 lines!(
     ax2,
     bylead_crps.lead,
@@ -268,6 +314,14 @@ lines!(
     color = :crimson,
     linewidth = 2,
     label = "MBM-corrected ensemble",
+)
+lines!(
+    ax2,
+    bylead_crps.lead,
+    bylead_crps.emos;
+    color = :darkorange,
+    linewidth = 2,
+    label = "EMOS normal",
 )
 vlines!(ax2, 0:24:last(STEPS); color = (:black, 0.12))
 axislegend(ax2; position = :lt, framevisible = false, labelsize = 11)
